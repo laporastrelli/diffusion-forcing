@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from .base_video_dataset import BaseVideoDataset
 
+import sys
 
 class DmlabVideoDataset(BaseVideoDataset):
     """

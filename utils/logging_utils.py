@@ -11,6 +11,13 @@ from tqdm import trange, tqdm
 import matplotlib.animation as animation
 from pathlib import Path
 
+from matplotlib.animation import FuncAnimation
+import os
+import tempfile
+import matplotlib.pyplot as plt
+
+import sys
+
 plt.set_loglevel("warning")
 
 from torchmetrics.functional import mean_squared_error, peak_signal_noise_ratio
@@ -44,40 +51,244 @@ def log_video(
     :param color: a tuple of 3 numbers specifying the color of the border for ground truth frames
     :param logger: optional logger to use. use global wandb if not specified
     """
-    if not logger:
-        logger = wandb
-    if observation_gt is None:
-        observation_gt = torch.zeros_like(observation_hat)
-    observation_hat[:context_frames] = observation_gt[:context_frames]
-    # Add red border of 1 pixel width to the context frames
-    for i, c in enumerate(color):
-        c = c / 255.0
-        observation_hat[:context_frames, :, i, [0, -1], :] = c
-        observation_hat[:context_frames, :, i, :, [0, -1]] = c
-        observation_gt[:, :, i, [0, -1], :] = c
-        observation_gt[:, :, i, :, [0, -1]] = c
-    video = torch.cat([observation_hat, observation_gt], -1).detach().cpu().numpy()
-    video = np.transpose(np.clip(video, a_min=0.0, a_max=1.0) * 255, (1, 0, 2, 3, 4)).astype(np.uint8)
-    # video[..., 1:] = video[..., :1]  # remove framestack, only visualize current frame
-    n_samples = len(video)
-    # use wandb directly here since pytorch lightning doesn't support logging videos yet
-    for i in range(n_samples):
-        logger.log({f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24), f"trainer/global_step": step})
-        # path = Path(f"outputs/robot_video/video_{i}")
-        # path.mkdir(parents=True, exist_ok=True)
-        # for t, f in enumerate(video[i]):
-        #     (path / "view1").mkdir(parents=True, exist_ok=True)
-        #     (path / "view2").mkdir(parents=True, exist_ok=True)
-        #     f = f[..., :32]
-        #     f = np.transpose(f, (1, 2, 0))
-        #     f = cv2.cvtColor(f, cv2.COLOR_RGB2BGR)
-        #     cv2.imwrite(str((path / f"view1/{t}.png").resolve()), f[:32])
-        #     cv2.imwrite(str((path / f"view2/{t}.png").resolve()), f[32:])
+
+    if observation_hat.size(2) == 3:
+        if not logger:
+            logger = wandb
+        if observation_gt is None:
+            observation_gt = torch.zeros_like(observation_hat)
+        observation_hat[:context_frames] = observation_gt[:context_frames]
+        # Add red border of 1 pixel width to the context frames
+        for i, c in enumerate(color):
+            c = c / 255.0
+            observation_hat[:context_frames, :, i, [0, -1], :] = c
+            observation_hat[:context_frames, :, i, :, [0, -1]] = c
+            observation_gt[:, :, i, [0, -1], :] = c
+            observation_gt[:, :, i, :, [0, -1]] = c
+        video = torch.cat([observation_hat, observation_gt], -1).detach().cpu().numpy()
+        video = np.transpose(np.clip(video, a_min=0.0, a_max=1.0) * 255, (1, 0, 2, 3, 4)).astype(np.uint8)
+        # video[..., 1:] = video[..., :1]  # remove framestack, only visualize current frame
+        n_samples = len(video)
+        # use wandb directly here since pytorch lightning doesn't support logging videos yet
+        for i in range(n_samples):
+            logger.log(
+                {
+                    f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24),
+                    f"trainer/global_step": step,
+                }
+            )
+    elif observation_hat.size(2) == 8 and observation_hat.size(3) > 1:
+        # load/default logger
+        if not logger:
+            logger = wandb
+        if observation_gt is None:
+            observation_gt = torch.zeros_like(observation_hat)
+        # ensure context frames match GT
+        observation_hat[:context_frames] = observation_gt[:context_frames]
+
+        # convert to NumPy arrays of shape (B, T, C, H, W)
+        vid_pred = observation_hat.detach().cpu().numpy().transpose(1, 0, 2, 3, 4)
+        vid_gt   = observation_gt.detach().cpu().numpy().transpose(1, 0, 2, 3, 4)
+        B, T, C, H, W = vid_pred.shape
+
+        # global min/max for consistent scaling
+        '''
+        vmin = min(vid_pred.min(), vid_gt.min())
+        vmax = max(vid_pred.max(), vid_gt.max())
+        vid_pred = (vid_pred - vmin) / (vmax - vmin + 1e-8)
+        vid_gt   = (vid_gt   - vmin) / (vmax - vmin + 1e-8)
+        '''
+
+        if namespace.startswith("train"):
+            # training: log full (T × C) grid per sample
+            for b in range(B):
+                if b > 4: break
+                fig, axs = plt.subplots(T, C, figsize=(C*2, T*2), squeeze=False)
+                for t in range(T):
+                    for ch in range(C):
+                        ax = axs[t][ch]
+                        vid_pred_norm_ch = (vid_pred[b,t,ch] - vid_pred[b,t,ch].min()) \
+                                        / (vid_pred[b,t,ch].max() - vid_pred[b,t,ch].min() + 1e-8)
+                        vid_gt_norm_ch = (vid_gt[b,t,ch] - vid_gt[b,t,ch].min()) \
+                                        / (vid_gt[b,t,ch].max() - vid_gt[b,t,ch].min() + 1e-8)
+                        pair = np.concatenate([vid_pred_norm_ch, vid_gt_norm_ch], axis=1)
+                        # mn, mx = pair.min(), pair.max()
+                        # pair = (pair - mn)/(mx - mn + 1e-8)
+                        ax.imshow(pair, cmap="gray")
+                        if t == 0:
+                            ax.set_title(f"Ch {ch}")
+                        ax.axis("off")
+                plt.tight_layout()
+                logger.log({
+                    f"{namespace}/{prefix}_sample{b}": wandb.Image(fig),
+                    "trainer/global_step": step,
+                })
+                plt.close(fig)
+
+        else:
+            # non-training: log one timestep at a time,
+            # each as a 1×C row of subplots for channels
+            for b in range(B):
+                if b > 4: break  # limit to first 5 samples
+                for t in range(12, 24):
+                    fig, axs = plt.subplots(1, C, figsize=(C*2, 2), squeeze=False)
+                    for ch in range(C):
+                        ax = axs[0][ch]
+                        vid_pred_norm_ch = (vid_pred[b,t,ch] - vid_pred[b,t,ch].min()) \
+                                        / (vid_pred[b,t,ch].max() - vid_pred[b,t,ch].min() + 1e-8)
+                        vid_gt_norm_ch = (vid_gt[b,t,ch] - vid_gt[b,t,ch].min()) \
+                                        / (vid_gt[b,t,ch].max() - vid_gt[b,t,ch].min() + 1e-8)
+                        pair = np.concatenate([vid_pred_norm_ch, vid_gt_norm_ch], axis=1)
+                        # mn, mx = pair.min(), pair.max()
+                        # pair = (pair - mn)/(mx - mn + 1e-8)
+                        ax.imshow(pair, cmap="gray")
+                        ax.set_title(f"Ch {ch}")
+                        ax.axis("off")
+                    plt.tight_layout()
+                    logger.log({
+                        f"{namespace}/{prefix}_sample{b}_frame{t}": wandb.Image(fig),
+                        "trainer/global_step": step,
+                    })
+                    plt.close(fig)
+
+    elif observation_hat.size(2) == 8 and observation_hat.size(3) == 1:
+        
+        # Convert the PyTorch tensors to NumPy arrays and squeeze out trailing singleton dimensions.
+        # New shape: [batch_size, timesteps, 8]
+        obs_hat = observation_hat.detach().cpu().numpy().squeeze(-1).squeeze(-1).transpose(1,0,2)
+        obs_gt  = observation_gt.detach().cpu().numpy().squeeze(-1).squeeze(-1).transpose(1,0,2)
+        
+        batch_size, timesteps, _ = obs_hat.shape
+        animations = []
+        
+        for b in range(batch_size):
+
+            if b > 4: break
+
+            # Extract positions for each object:
+            # Object 1: indices 0 (x), 1 (y); Object 2: indices 4 (x), 5 (y).
+            pos1_hat = obs_hat[b, :, 0:2]  # shape: (timesteps, 2)
+            pos2_hat = obs_hat[b, :, 4:6]
+            pos1_gt  = obs_gt[b, :, 0:2]
+            pos2_gt  = obs_gt[b, :, 4:6]
+            
+            # Create a figure with two subplots (left for observation_hat, right for observation_gt)
+            fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(10, 5))
+            margin = 0.05  # extra margin for axis limits
+            
+            # Configure left subplot axes (for observation_hat)
+            positions_left = np.concatenate([pos1_hat, pos2_hat], axis=0)
+            x_min_left, x_max_left = positions_left[:, 0].min(), positions_left[:, 0].max()
+            y_min_left, y_max_left = positions_left[:, 1].min(), positions_left[:, 1].max()
+            ax_left.set_xlim(x_min_left - margin, x_max_left + margin)
+            ax_left.set_ylim(y_min_left - margin, y_max_left + margin)
+            ax_left.set_title("Predictions")
+            ax_left.set_xlabel("X")
+            ax_left.set_ylabel("Y")
+            
+            # Configure right subplot axes (for observation_gt)
+            positions_right = np.concatenate([pos1_gt, pos2_gt], axis=0)
+            x_min_right, x_max_right = positions_right[:, 0].min(), positions_right[:, 0].max()
+            y_min_right, y_max_right = positions_right[:, 1].min(), positions_right[:, 1].max()
+            ax_right.set_xlim(x_min_right - margin, x_max_right + margin)
+            ax_right.set_ylim(y_min_right - margin, y_max_right + margin)
+            ax_right.set_title("Ground-Truth")
+            ax_right.set_xlabel("X")
+            ax_right.set_ylabel("Y")
+            
+            # Initialize line objects for each object in both subplots.
+            line1_left, = ax_left.plot([], [], 'o-', color='blue', label='Object 1')
+            line2_left, = ax_left.plot([], [], 'o-', color='orange', label='Object 2')
+            ax_left.legend()
+            
+            line1_right, = ax_right.plot([], [], 'o-', color='blue', label='Object 1')
+            line2_right, = ax_right.plot([], [], 'o-', color='orange', label='Object 2')
+            ax_right.legend()
+            
+            # Create red border rectangles:
+            # For left subplot, the red border should be present only during the first context_frames.
+            rect_left = plt.Rectangle(
+                (x_min_left - margin, y_min_left - margin),
+                (x_max_left - x_min_left) + 2 * margin,
+                (y_max_left - y_min_left) + 2 * margin,
+                fill=False, edgecolor='red', linewidth=6
+            )
+            ax_left.add_patch(rect_left)
+            
+            # For right subplot, the red border is always visible.
+            rect_right = plt.Rectangle(
+                (x_min_right - margin, y_min_right - margin),
+                (x_max_right - x_min_right) + 2 * margin,
+                (y_max_right - y_min_right) + 2 * margin,
+                fill=False, edgecolor='red', linewidth=6
+            )
+            ax_right.add_patch(rect_right)
+            
+            # Initialization function for the animation.
+            def init():
+                line1_left.set_data([], [])
+                line2_left.set_data([], [])
+                line1_right.set_data([], [])
+                line2_right.set_data([], [])
+                rect_left.set_visible(True)  # initially visible for left
+                rect_right.set_visible(True)  # always visible for right
+                return line1_left, line2_left, line1_right, line2_right, rect_left, rect_right
+            
+            # Update function: updates the traces and toggles visibility of the left red border.
+            def update(frame):
+                line1_left.set_data(pos1_hat[:frame+1, 0], pos1_hat[:frame+1, 1])
+                line2_left.set_data(pos2_hat[:frame+1, 0], pos2_hat[:frame+1, 1])
+                line1_right.set_data(pos1_gt[:frame+1, 0], pos1_gt[:frame+1, 1])
+                line2_right.set_data(pos2_gt[:frame+1, 0], pos2_gt[:frame+1, 1])
+                
+                # Left subplot: red border is visible only for frames less than context_frames.
+                rect_left.set_visible(frame < context_frames)
+                # Right subplot: red border remains visible.
+                rect_right.set_visible(True)
+                
+                return line1_left, line2_left, line1_right, line2_right, rect_left, rect_right
+            
+            # Create the animation object.
+            fps=12
+            ani = FuncAnimation(
+                fig,
+                update,
+                frames=timesteps,
+                init_func=init,
+                blit=True,
+                interval=1000 / fps  # milliseconds per frame
+            )
+            
+            # Optionally, save the animation to a video file. If logger is provided, log the video to wandb.
+            video_path = None
+            output_prefix = None
+            if output_prefix is not None:
+                video_path = f"{output_prefix}_batch_{b}.mp4"
+            elif logger is not None:
+                # If no output_prefix is provided and logger is available, use a temporary file.
+                tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                video_path = tmp_file.name
+                tmp_file.close()
+            
+            if video_path is not None:
+                ani.save(video_path, writer='ffmpeg', fps=fps)
+                print(f"Saved video to {video_path}")
+                if logger is not None:
+                    # Log the video to wandb.
+                    logger.log({f"{namespace}/{prefix}_{b}": wandb.Video(video_path, fps=fps, format="mp4"), 
+                                f"trainer/global_step": step,})
+                    # If we used a temporary file (i.e. no output_prefix), remove it after logging.
+                    if output_prefix is None:
+                        os.remove(video_path)
+            
+            animations.append(ani)
+            plt.close(fig)
 
 
 def get_validation_metrics_for_videos(
     observation_hat,
     observation_gt,
+    metrics=["mse", "psnr", "ssim", "uiqi"],
     lpips_model: Optional[LearnedPerceptualImagePatchSimilarity] = None,
     fid_model: Optional[FrechetInceptionDistance] = None,
     fvd_model: Optional[FrechetVideoDistance] = None,
@@ -101,11 +312,15 @@ def get_validation_metrics_for_videos(
     observation_hat = observation_hat.view(-1, channel, height, width)
     observation_gt = observation_gt.view(-1, channel, height, width)
 
-    output_dict["mse"] = mean_squared_error(observation_hat, observation_gt)
-    output_dict["psnr"] = peak_signal_noise_ratio(observation_hat, observation_gt, data_range=2.0)
-    output_dict["ssim"] = structural_similarity_index_measure(observation_hat, observation_gt, data_range=2.0)
-    output_dict["uiqi"] = universal_image_quality_index(observation_hat, observation_gt, data_range=2.0)
-
+    if "mse" in metrics:
+        output_dict["mse"] = mean_squared_error(observation_hat, observation_gt)
+    if "psnr" in metrics:
+        output_dict["psnr"] = peak_signal_noise_ratio(observation_hat, observation_gt, data_range=2.0)
+    if "ssim" in metrics:
+        output_dict["ssim"] = structural_similarity_index_measure(observation_hat, observation_gt, data_range=2.0)
+    if "uiqi" in metrics:
+        output_dict["uiqi"] = universal_image_quality_index(observation_hat, observation_gt)
+    
     # operations for LPIPS and FID
     observation_hat = torch.clamp(observation_hat, -1.0, 1.0)
     observation_gt = torch.clamp(observation_gt, -1.0, 1.0)

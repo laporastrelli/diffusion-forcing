@@ -10,6 +10,9 @@ calc_crps_sum: False
 compute_fid_lpips: False
 uncertainty_scale: 1
 learnable_init_z: True
+metadata: ${dataset.metadata}
+vae_checkpoint: ${dataset.vae_checkpoint}
+
 optimizer_beta: [0.9, 0.99]
 
 diffusion:

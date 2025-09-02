@@ -1,0 +1,23 @@
+###############################
+{'experiment': {'debug': '${debug}', 'tasks': ['validation'], 'num_nodes': 1, 'training': {'precision': '16-mixed', 'compile': False, 'lr': 8e-05, 'batch_size': 8, 'max_epochs': -1, 'max_steps': 200005, 'max_time': None, 'data': {'num_workers': 8, 'shuffle': True}, 'optim': {'accumulate_grad_batches': 1, 'gradient_clip_val': 1.0}, 'checkpointing': {'every_n_train_steps': 10000, 'every_n_epochs': None, 'train_time_interval': None, 'enable_version_counter': False}}, 'validation': {'precision': '16-mixed', 'compile': False, 'batch_size': 8, 'val_every_n_step': 5000, 'val_every_n_epoch': None, 'limit_batch': 1, 'inference_mode': True, 'data': {'num_workers': 16, 'shuffle': False}}, 'test': {'precision': '16-mixed', 'compile': False, 'batch_size': 8, 'limit_batch': 1, 'data': {'num_workers': 16, 'shuffle': False}}, 'logging': {'metrics': ['fvd']}}, 'dataset': {'debug': '${debug}', 'metadata': 'data/${dataset.name}/metadata.json', 'data_mean': 0.5, 'data_std': 0.5, 'save_dir': 'data/minecraft', 'n_frames': 10, 'context_length': 2, 'resolution': 128, 'observation_shape': [3, '${dataset.resolution}', '${dataset.resolution}'], 'external_cond_dim': 0, 'validation_multiplier': 1, 'frame_skip': 2}, 'algorithm': {'debug': '${debug}', 'lr': '${experiment.training.lr}', 'x_shape': '${dataset.observation_shape}', 'frame_stack': 1, 'frame_skip': '${dataset.frame_skip}', 'data_mean': '${dataset.data_mean}', 'data_std': '${dataset.data_std}', 'external_cond_dim': 0, 'context_frames': '${dataset.context_length}', 'weight_decay': 0.002, 'warmup_steps': 10000, 'optimizer_beta': [0.9, 0.99], 'uncertainty_scale': 1, 'guidance_scale': 0.0, 'chunk_size': 1, 'scheduling_matrix': 'autoregressive', 'noise_level': 'random_all', 'causal': True, 'diffusion': {'objective': 'pred_v', 'beta_schedule': 'sigmoid', 'schedule_fn_kwargs': {}, 'clip_noise': 6.0, 'use_snr': False, 'use_cum_snr': False, 'use_fused_snr': True, 'snr_clip': 5.0, 'cum_snr_decay': 0.96, 'timesteps': 1000, 'sampling_timesteps': 100, 'ddim_sampling_eta': 0.0, 'stabilization_level': 15, 'architecture': {'network_size': 64, 'attn_heads': 4, 'attn_dim_head': 64, 'dim_mults': [1, 2, 4, 8], 'resolution': '${dataset.resolution}', 'attn_resolutions': [16, 32, 64, 128], 'use_init_temporal_attn': True, 'use_linear_attn': True, 'time_emb_type': 'rotary'}}, 'n_frames': '${dataset.n_frames}', 'metadata': '${dataset.metadata}', 'metrics': ['fvd']}, 'debug': False, 'wandb': {'entity': 'Diffusion_Forcing', 'project': 'diffusion-forcing', 'mode': 'online'}, 'resume': None, 'load': 'outputs/minecraft.ckpt', 'name': 'sample_minecraft_pretrained'}
+###############################
+Non-A100 GPU detected, using math or mem efficient attention if input tensor is on cuda
+[2025-01-31 18:41:24,008][lightning.pytorch.utilities.rank_zero][INFO] - Using 16bit Automatic Mixed Precision (AMP)
+[2025-01-31 18:41:24,146][lightning.pytorch.utilities.rank_zero][INFO] - GPU available: True (cuda), used: True
+[2025-01-31 18:41:24,146][lightning.pytorch.utilities.rank_zero][INFO] - TPU available: False, using: 0 TPU cores
+[2025-01-31 18:41:24,146][lightning.pytorch.utilities.rank_zero][INFO] - IPU available: False, using: 0 IPUs
+[2025-01-31 18:41:24,146][lightning.pytorch.utilities.rank_zero][INFO] - HPU available: False, using: 0 HPUs
+[2025-01-31 18:41:24,146][lightning.pytorch.utilities.rank_zero][INFO] - `Trainer(limit_val_batches=1)` was configured so 1 batch will be used.
+####################################
+[[0. 1. 0. 0.]
+ [0. 1. 0. 0.]
+ [0. 1. 0. 0.]
+ [0. 1. 0. 0.]
+ [0. 1. 0. 0.]
+ [0. 0. 0. 1.]
+ [0. 0. 0. 1.]
+ [0. 0. 0. 1.]
+ [0. 1. 0. 0.]
+ [0. 1. 0. 0.]]
+torch.Size([10, 3, 128, 128])
+####################################

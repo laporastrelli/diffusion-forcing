@@ -1,0 +1,13 @@
+defaults:
+  - base_video
+
+resolution: 1
+external_cond_dim: 0
+n_frames: 48
+frame_skip: 1
+save_dir: /data2/users/lr4617/data/two_balls_collision/
+validation_multiplier: 6
+context_length: 4
+observation_shape: [8, 1, 1]
+data_mean: [31.84543804, 31.88148656, -0.11953395,  0.26749907, 31.93203487, 31.85637319, -0.60561253, 0.52595589]
+data_std: [15.1321814, 15.09604065, 125.19351157, 126.68476077, 15.23919083, 15.21825236, 124.66898463, 126.69775104]

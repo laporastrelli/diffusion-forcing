@@ -1,0 +1,15 @@
+defaults:
+  - base_video
+
+save_dir: /data2/users/lr4617/data/video_vae/single_pendulum_ghnn_full_rand_extrapolation_square
+n_frames: 12
+resolution: 4
+data_mean: 0.
+data_std: 1.
+external_cond_dim: 0
+context_length: 12
+frame_skip: 1
+validation_multiplier: 6
+observation_shape: [8, 4, 4]
+vae_checkpoint: "/data2/users/lr4617/video_vae_project/video_vae/selected_runs/single_pendulum/run_1_2025_05_19_18_57_29/checkpoints/vae_final.pt"
+device: ${experiment.device}

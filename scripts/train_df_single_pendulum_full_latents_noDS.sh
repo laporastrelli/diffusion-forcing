@@ -1,0 +1,26 @@
+name="df_single_pendulum_full_latents_noDS"
+dataset="video_single_pendulum_full_vae_latents"
+batch_size=20
+epochs=2
+checkpointing_frequency=1200
+val_every_n_epoch=151
+val_batch_size=100
+device=2
+vae_checkpoint="/data2/users/lr4617/video_vae_project/video_vae/selected_runs/single_pendulum_noDS/run_1_2025_06_16_13_08_49/checkpoints/vae_final.pt"
+
+export PYTHONPATH="/data2/users/lr4617"
+export CUDA_VISIBLE_DEVICES=${device}
+CUDA_VISIBLE_DEVICES=${device} python main.py \
+    +name=${name} \
+    dataset=${dataset}\
+    experiment.training.batch_size=${batch_size} \
+    experiment.training.max_epochs=${epochs} \
+    experiment.training.checkpointing.every_n_train_steps=${checkpointing_frequency} \
+    experiment.validation.val_every_n_epoch=${val_every_n_epoch} \
+    experiment.validation.batch_size=${val_batch_size} \
+    experiment.use_callbacks=true \
+    experiment.tasks=["training","validation"] \
+    experiment.device=${device} \
+    dataset.vae_checkpoint=${vae_checkpoint} \
+    dataset.observation_shape=[8,4,4] \
+    algorithm.metrics=["mse"] \

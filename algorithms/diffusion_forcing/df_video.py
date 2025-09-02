@@ -10,7 +10,12 @@ from algorithms.common.metrics import (
 )
 
 from utils.logging_utils import log_video, get_validation_metrics_for_videos
+from pytorch_lightning.trainer.states import TrainerFn
 
+import numpy as np
+import os
+
+import sys
 
 class DiffusionForcingVideo(DiffusionForcingBase):
     def _build_model(self):
@@ -41,33 +46,73 @@ class DiffusionForcingVideo(DiffusionForcingBase):
             )
         return output_dict
 
-    def on_validation_epoch_end(self, namespace="validation"):
+    def on_validation_epoch_end(self, namespace="validation") -> None:
         if not self.validation_step_outputs:
-            return
-
+            return  
+        
         xs_pred = []
         xs = []
-        for pred, gt in self.validation_step_outputs:
+        for _, (pred, gt) in enumerate(self.validation_step_outputs):                
             xs_pred.append(pred)
             xs.append(gt)
+            
         xs_pred = torch.cat(xs_pred, 1)
-        xs = torch.cat(xs, 1)
+        xs      = torch.cat(xs, 1)
 
-        log_video(
-            xs_pred,
-            xs,
-            step=None if namespace == "test" else self.global_step,
-            namespace=namespace + "_vis",
-            context_frames=self.context_frames,
-            logger=self.logger.experiment,
-        )
+        print("===============================================")
+        print(xs_pred.shape, xs.shape)
+        print("===============================================")
+
+        if self.logger:
+            if self.trainer.state.fn == TrainerFn.VALIDATING:
+                print('###############################################################')
+                xs_to_save      = xs.detach().cpu().numpy()
+                xs_pred_to_save = xs_pred.detach().cpu().numpy()
+
+                print('ground-truth shape: ', xs_to_save.shape)
+                print('predicition shape : ', xs_pred_to_save.shape)
+
+                try:
+                    vae_ckpnt = self.cfg.vae_checkpoint
+                except (AttributeError, KeyError):
+                    vae_ckpnt = None
+                if vae_ckpnt is not None:
+                    root = os.path.dirname(os.path.dirname(self.cfg.vae_checkpoint))
+                    save_dir = os.path.join(root, "diffusion_latents", f'validation_{self.context_length}')
+                else:
+                    save_dir = os.path.join(self.logger.save_dir, f'validation_{self.context_length}')
+                os.makedirs(save_dir, exist_ok=True)
+
+                print('#######################################')
+                print("SAVE DIR: ", save_dir)
+                print('#######################################')
+
+                for b in range(xs_pred_to_save.shape[1]):
+                    p_np = xs_pred_to_save[:, b]
+                    g_np = xs_to_save[:,      b]
+                    np.save(os.path.join(save_dir, 
+                                         f"validation_pred_{b:05d}.npy"), p_np)
+                    np.save(os.path.join(save_dir, 
+                                         f"validation_gt_{b:05d}.npy"),   g_np)
+                    
+                print('Validation data saved successfully!')
+                print('##################################################################')
+                
+            log_video(
+                xs_pred,
+                xs,
+                step=None if namespace == "test" else self.global_step,
+                namespace=namespace + "_vis",
+                context_frames=self.context_frames,
+                logger=self.logger.experiment,
+            )
 
         metric_dict = get_validation_metrics_for_videos(
             xs_pred[self.context_frames :],
             xs[self.context_frames :],
             lpips_model=self.validation_lpips_model,
             fid_model=self.validation_fid_model,
-            fvd_model=self.validation_fvd_model,
+            fvd_model=self.validation_fvd_model
         )
         self.log_dict(
             {f"{namespace}/{k}": v for k, v in metric_dict.items()}, on_step=False, on_epoch=True, prog_bar=True

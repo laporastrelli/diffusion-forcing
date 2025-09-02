@@ -151,3 +151,10 @@ checkpoints
 # Pycharm setting
 .idea/
 data/*
+
+
+results/
+results_df/*
+samples_for_eval/*
+
+quickstart_atten.tar.gz

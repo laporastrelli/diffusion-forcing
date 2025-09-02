@@ -2,6 +2,10 @@ defaults:
   - base_pytorch
 
 tasks: [training]
+
+use_callbacks: false
+device: 0
+
 training:
   lr: 2e-4
   precision: 16-mixed
@@ -14,11 +18,18 @@ training:
     gradient_clip_val: 1.0
 
 validation:
-  val_every_n_step: 5000
-  val_every_n_epoch: null
-  batch_size: 16
-  limit_batch: 1
+  val_every_n_step: null
+  val_every_n_epoch: 1000
+  batch_size: 100
+  limit_batch: 100
 
 test:
   limit_batch: 1
   batch_size: 16
+
+logging:
+  metrics:
+    - mse
+    # - fvd
+    # - fid
+    # - lpips

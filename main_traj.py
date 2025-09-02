@@ -5,14 +5,8 @@ By its MIT license, you must keep the above sentence in `README.md`
 and the `LICENSE` file to credit the author.
 
 Main file for the project. This will create and run new experiments and load checkpoints from wandb. 
+Borrowed part of the code from David Charatan and wandb.
 """
-
-import warnings
-
-warnings.filterwarnings(
-    action="ignore",
-    module="gluonts*",
-)
 
 import sys
 import subprocess
@@ -32,16 +26,7 @@ from utils.distributed_utils import is_rank_zero
 def run_local(cfg: DictConfig):
     # delay some imports in case they are not needed in non-local envs for submission
     from experiments import build_experiment
-    import torch
     from utils.wandb_utils import OfflineWandbLogger, SpaceEfficientWandbLogger
-
-    import torch._dynamo
-
-    torch._dynamo.config.suppress_errors = True
-
-    # Set matmul precision (for newer GPUs, e.g., A6000).
-    if hasattr(torch, "set_float32_matmul_precision"):
-        torch.set_float32_matmul_precision("high")
 
     # Get yaml names
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
@@ -73,15 +58,20 @@ def run_local(cfg: DictConfig):
         else:
             logger_cls = SpaceEfficientWandbLogger
 
+        offline = cfg.wandb.mode != "online"
         logger = logger_cls(
             name=name,
             save_dir=str(output_dir),
-            offline=cfg.wandb.mode != "online",
+            offline=offline,
+            entity=cfg.wandb.entity,
             project=cfg.wandb.project,
-            log_model="all" if cfg.wandb.mode == "online" else False,
+            log_model="all" if not offline else False,
             config=OmegaConf.to_container(cfg),
             id=resume,
         )
+
+        print('Output Directory: ' , logger.save_dir)
+        
     else:
         logger = None
 
@@ -105,6 +95,10 @@ def run_local(cfg: DictConfig):
 
     if checkpoint_path and is_rank_zero:
         print(f"Will load checkpoint from {checkpoint_path}")
+    
+    # CHECK
+    assert cfg.experiment.training.max_steps == cfg.experiment.validation.val_every_n_step, \
+        "Validation has to occur at the end of training only."
 
     # launch experiment
     experiment = build_experiment(cfg, logger, checkpoint_path)
@@ -148,19 +142,19 @@ def run_slurm(cfg: DictConfig):
     try:
         while not list(slurm_log_dir.glob("*.out")) and not list(slurm_log_dir.glob("*.err")):
             time.sleep(1)
-        print(cyan("To trace the outputs and errors, run the following command:"))
+        print(cyan("To trace the outputs and errors, run the following command:"), msg)
     except KeyboardInterrupt:
         print("Keyboard interrupt detected. Exiting...")
         print(
-            cyan("To trace the outputs and errors, manually wait for the job to start and run the following command:")
+            cyan("To trace the outputs and errors, manually wait for the job to start and run the following command:"),
+            msg,
         )
-    print(msg)
 
 
 @hydra.main(
     version_base=None,
     config_path="configurations",
-    config_name="config",
+    config_name="config_traj",
 )
 def run(cfg: DictConfig):
     if "_on_compute_node" in cfg and cfg.cluster.is_compute_node_offline:
@@ -190,16 +184,15 @@ def run(cfg: DictConfig):
             "When resuming a wandb run with `resume=[wandb id]`, checkpoint will be loaded from the cloud"
             "and `load` should not be specified."
         )
-
+        
     if resume:
         load_id = resume
-        print("#############################")
-        print(load_id)
-        print("#############################")
     elif load and is_run_id(load):
         load_id = load
     else:
         load_id = None
+
+    
 
     if load_id and "_on_compute_node" not in cfg:
         run_path = f"{cfg.wandb.entity}/{cfg.wandb.project}/{load_id}"
@@ -213,4 +206,4 @@ def run(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    run()
+    run()  # pylint: disable=no-value-for-parameter

@@ -101,4 +101,6 @@ if __name__ == "__main__":
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True, num_workers=16)
 
     for batch in tqdm.tqdm(dataloader):
+        print(batch.size())
+        break
         pass

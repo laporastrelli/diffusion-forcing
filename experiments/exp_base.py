@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Union, Dict
 import pathlib
 import os
+import sys
 
 import hydra
 import torch
@@ -23,6 +24,10 @@ from omegaconf import DictConfig
 
 from utils.print_utils import cyan
 from utils.distributed_utils import is_rank_zero
+
+from algorithms.diffusion_forcing.callbacks import SaveTrainReconsCallback
+
+torch.set_float32_matmul_precision("high")
 
 
 class BaseExperiment(ABC):
@@ -92,7 +97,8 @@ class BaseExperiment(ABC):
 
 class BaseLightningExperiment(BaseExperiment):
     """
-    Abstract class for pytorch lightning experiments. Useful for computer vision & nlp where main components are
+    Abstract class for pytorch lightning experiments. 
+    Useful for computer vision & nlp where main components are
     simply models, datasets and train loop.
     """
 
@@ -139,6 +145,9 @@ class BaseLightningExperiment(BaseExperiment):
                 persistent_workers=True,
             )
         else:
+            print("|||||||||||||||||||||||||||||||||")
+            print('Validation Dataset Does Not Exist!')
+            print("|||||||||||||||||||||||||||||||||")
             return None
 
     def _build_test_loader(self) -> Optional[Union[TRAIN_DATALOADERS, pl.LightningDataModule]]:
@@ -177,6 +186,17 @@ class BaseLightningExperiment(BaseExperiment):
         if "early_stopping" in self.cfg.training:
             self.early_stopping_callback = EarlyStopping(**self.cfg.training.early_stopping)
             callbacks.append(self.early_stopping_callback)
+        
+        train_loader = self._build_training_loader()
+        val_loader   = self._build_validation_loader()
+
+        if self.cfg.use_callbacks:
+            callbacks.append(
+                SaveTrainReconsCallback(
+                    train_loader=train_loader,
+                    dataset_config=self.root_cfg.dataset,
+                    subfolder="training")
+            )
 
         trainer = pl.Trainer(
             accelerator="auto",
@@ -198,10 +218,15 @@ class BaseLightningExperiment(BaseExperiment):
             max_time=self.cfg.training.max_time,
         )
 
+        print(">>> callbacks registered:", [type(cb).__name__ for cb in callbacks])
+
+        # if self.debug:
+        #     self.logger.watch(self.algo, log="all")
+
         trainer.fit(
             self.algo,
-            train_dataloaders=self._build_training_loader(),
-            val_dataloaders=self._build_validation_loader(),
+            train_dataloaders=train_loader,
+            val_dataloaders=val_loader,
             ckpt_path=self.ckpt_path,
         )
 

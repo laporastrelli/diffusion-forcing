@@ -2,13 +2,15 @@ from functools import partial
 from typing import Optional, Literal
 import torch
 from torch import nn
+import math
+
 from einops import rearrange
 from rotary_embedding_torch import RotaryEmbedding
 from .embeddings import Timesteps, TimestepEmbedding
 from .attention import SpatialAttentionBlock, TemporalAttentionBlock
 from .resnet import ResnetBlock, Downsample, Upsample
 from .utils import default
-
+import sys
 
 class NoiseLevelSequential(nn.Sequential):
     """
@@ -31,6 +33,7 @@ class Unet3D(nn.Module):
     def __init__(
         self,
         dim: int,
+        x_shape: tuple[int, int, int],
         init_dim: Optional[int] = None,
         out_dim: Optional[int] = None,
         external_cond_dim: Optional[int] = None,
@@ -45,6 +48,7 @@ class Unet3D(nn.Module):
         init_kernel_size=7,
         is_causal=True,
         time_emb_type: Literal["sinusoidal", "rotary"] = "rotary",
+        upscale=True
     ):
         super().__init__()
         self.channels = channels
@@ -55,9 +59,22 @@ class Unet3D(nn.Module):
         out_dim = default(out_dim, channels)
         self.is_causal = is_causal
         dim_mults = list(dim_mults)
-        dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
+
+        # modified to take into account the input shape
+        if x_shape[0] == 3: # assuming that when x_shape[0] == 3, 
+                            # it is a video with 3 channels and has
+                            # shape that supports the original code
+            dims = [init_dim, *map(lambda m: dim * m, dim_mults)] # Original line
+        else:
+            _, H, W = x_shape
+            max_spatial_levels = int(math.floor(math.log2(min(H, W))))
+            kept_mults = dim_mults[:max_spatial_levels]
+            dims = [dim] + [dim * m for m in kept_mults]
+        
         in_out = list(zip(dims[:-1], dims[1:]))
         mid_dim = dims[-1]
+
+        self.upscale = upscale
 
         noise_level_emb_dim = dim * 4
         self.noise_level_pos_embedding = nn.Sequential(
@@ -146,7 +163,7 @@ class Unet3D(nn.Module):
                     block_klass_noise(dim_in, dim_in),
                     (spatial_attn_klass(dim_in, use_linear=use_linear_attn and idx > 0) if use_attn else nn.Identity()),
                     temporal_attn_klass(dim_in) if use_attn else nn.Identity(),
-                    Upsample(dim_in) if not is_last else nn.Identity(),
+                    Upsample(dim_in, upscale=self.upscale) if not is_last else nn.Identity(),
                 )
             )
 
@@ -170,7 +187,7 @@ class Unet3D(nn.Module):
         x = self.init_conv(x)
         x = self.init_temporal_attn(x)
         h = x.clone()
-
+        
         hs = []
 
         for block, downsample in self.down_blocks:
@@ -183,6 +200,6 @@ class Unet3D(nn.Module):
         for block in self.up_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
             h = block(h, noise_level_emb)
-
+            
         h = torch.cat([h, x], dim=1)
         return self.out(h)

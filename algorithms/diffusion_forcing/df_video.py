@@ -8,7 +8,12 @@ from algorithms.common.metrics import (
 )
 from .df_base import DiffusionForcingBase
 from utils.logging_utils import log_video, get_validation_metrics_for_videos
+from pytorch_lightning.trainer.states import TrainerFn
 
+import numpy as np
+import os
+
+import sys
 
 class DiffusionForcingVideo(DiffusionForcingBase):
     """
@@ -18,6 +23,8 @@ class DiffusionForcingVideo(DiffusionForcingBase):
     def __init__(self, cfg: DictConfig):
         self.metrics = cfg.metrics
         self.n_tokens = cfg.n_frames // cfg.frame_stack  # number of max tokens for the model
+        self.context_length = cfg.context_frames
+        self.cfg = cfg
         super().__init__(cfg)
 
     def _build_model(self):
@@ -39,7 +46,7 @@ class DiffusionForcingVideo(DiffusionForcingBase):
             )
         return output_dict
 
-    def on_validation_epoch_end(self, namespace="validation") -> None:
+    def on_validation_epoch_end_2(self, namespace="validation") -> None:
         if not self.validation_step_outputs:
             return
         xs_pred = []
@@ -51,6 +58,33 @@ class DiffusionForcingVideo(DiffusionForcingBase):
         xs = torch.cat(xs, 1)
 
         if self.logger:
+            if self.trainer.state.fn == TrainerFn.VALIDATING:
+                print('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+                xs_to_save = xs.detach().cpu().numpy()
+                xs_pred_to_save = xs_pred.detach().cpu().numpy()
+
+                print('ground-truth shape: ', xs_to_save.shape)
+                print('predicition shape: ', xs_pred_to_save.shape)
+
+                save_dir = os.path.join(self.logger.save_dir, f'validation_{self.context_length}')
+
+                if not os.path.isdir(save_dir):
+                    os.makedirs(save_dir)
+                local_files = os.listdir(save_dir)
+                if len(local_files) == 0:
+                    np.save(os.path.join(save_dir, 'validation_gts.npy'), xs_to_save)
+                    np.save(os.path.join(save_dir, 'validation_preds.npy'), xs_pred_to_save)
+                else:
+                    len_local_files = len(local_files)
+                    print('#####################################')
+                    print('len_local_files: ', len_local_files)
+                    print('#####################################')
+                    np.save(os.path.join(save_dir, f"validation_gts_{len_local_files}.npy"), xs_to_save)
+                    np.save(os.path.join(save_dir, f"validation_preds_{len_local_files}.npy"), xs_pred_to_save)
+                    
+                print('Validation data saved successfully!')
+                print('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+                
             log_video(
                 xs_pred,
                 xs,
@@ -66,6 +100,94 @@ class DiffusionForcingVideo(DiffusionForcingBase):
             lpips_model=self.validation_lpips_model,
             fid_model=self.validation_fid_model,
             fvd_model=(self.validation_fvd_model[0] if self.validation_fvd_model else None),
+            metrics=self.metrics,
+        )
+        self.log_dict(
+            {f"{namespace}/{k}": v for k, v in metric_dict.items()},
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
+
+        self.validation_step_outputs.clear()
+
+    def on_validation_epoch_end(self, namespace="validation") -> None:
+        if not self.validation_step_outputs:
+            return 
+        xs_pred = []
+        xs = []
+        idxs = []
+        for i, (pred, gt, idxs_batch) in enumerate(self.validation_step_outputs):                
+            xs_pred.append(pred)
+            xs.append(gt)
+            if idxs_batch is None:
+                tmp = np.arange(i*pred.size(1), i*pred.size(1) + pred.size(1))
+                tmp_torch = torch.from_numpy(tmp)
+                idxs.append(tmp_torch)
+            else:
+                idxs.append(idxs_batch)
+
+        xs_pred = torch.cat(xs_pred, 1)
+        xs      = torch.cat(xs, 1)
+        idxs    = torch.cat(idxs, 0)
+
+        print("===============================================")
+        print(xs_pred.shape, xs.shape, idxs.shape)
+        print("===============================================")
+
+        if self.logger:
+            if self.trainer.state.fn == TrainerFn.VALIDATING:
+                print('###############################################################')
+                xs_to_save      = xs.detach().cpu().numpy()
+                xs_pred_to_save = xs_pred.detach().cpu().numpy()
+                idxs_to_save    = idxs.detach().cpu().numpy()
+
+                print('ground-truth shape: ', xs_to_save.shape)
+                print('predicition shape : ', xs_pred_to_save.shape)
+                print('indexes shape     : ', idxs_to_save.shape)
+
+                try:
+                    vae_ckpnt = self.cfg.vae_checkpoint
+                except (AttributeError, KeyError):
+                    vae_ckpnt = None
+                if vae_ckpnt is not None:
+                    root = os.path.dirname(os.path.dirname(self.cfg.vae_checkpoint))
+                    save_dir = os.path.join(root, "diffusion_latents", f'validation_{self.context_length}')
+                else:
+                    save_dir = os.path.join(self.logger.save_dir, f'validation_{self.context_length}')
+                os.makedirs(save_dir, exist_ok=True)
+
+                print('#######################################')
+                print("SAVE DIR: ", save_dir)
+                print('#######################################')
+
+                for b, vid_idx in enumerate(idxs):
+                    p_np = xs_pred_to_save[:, b]
+                    g_np = xs_to_save[:,      b]
+                    np.save(os.path.join(save_dir, 
+                                         f"validation_pred_{vid_idx:05d}.npy"), p_np)
+                    np.save(os.path.join(save_dir, 
+                                         f"validation_gt_{vid_idx:05d}.npy"),   g_np)
+                    
+                print('Validation data saved successfully!')
+                print('##################################################################')
+                
+            log_video(
+                xs_pred,
+                xs,
+                step=None if namespace == "test" else self.global_step,
+                namespace=namespace + "_vis",
+                context_frames=self.context_frames,
+                logger=self.logger.experiment,
+            )
+
+        metric_dict = get_validation_metrics_for_videos(
+            xs_pred[self.context_frames :],
+            xs[self.context_frames :],
+            lpips_model=self.validation_lpips_model,
+            fid_model=self.validation_fid_model,
+            fvd_model=(self.validation_fvd_model[0] if self.validation_fvd_model else None),
+            metrics=self.metrics,
         )
         self.log_dict(
             {f"{namespace}/{k}": v for k, v in metric_dict.items()},

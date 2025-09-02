@@ -1,0 +1,12 @@
+main.py
+- understand how cfg is created (maybe has to do with hydra)
+
+base_video_dataset.py
+- capire tutti gli arguments degli .yaml files
+- capire metadata.json
+
+creazione dataset
+- creare config.yaml (assicurati di aver capito come funzionano TUTTI i parametri)
+- creare metadata.json 
+- fare in modo di che tutti i video abbiano la stessa lungzhezza
+- modificare pipeline per accettare nuovo dataset tra i dataset disponibili

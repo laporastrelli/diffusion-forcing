@@ -8,6 +8,7 @@ from tqdm import tqdm
 from internetarchive import download
 from .base_video_dataset import BaseVideoDataset
 
+import sys
 
 class DmlabVideoDataset(BaseVideoDataset):
     """
@@ -74,6 +75,9 @@ class DmlabVideoDataset(BaseVideoDataset):
 
         video = torch.from_numpy(video / 255.0).float().permute(0, 3, 1, 2).contiguous()
         video = self.transform(video)
+        
+        print(video.shape)
+        sys.exit()
         return (
             video[:: self.frame_skip],
             actions[:: self.frame_skip],

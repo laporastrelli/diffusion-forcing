@@ -69,6 +69,9 @@ def run_local(cfg: DictConfig):
             config=OmegaConf.to_container(cfg),
             id=resume,
         )
+
+        print('Output Directory: ' , logger.save_dir)
+        
     else:
         logger = None
 
@@ -92,6 +95,10 @@ def run_local(cfg: DictConfig):
 
     if checkpoint_path and is_rank_zero:
         print(f"Will load checkpoint from {checkpoint_path}")
+    
+    # CHECK
+    assert cfg.experiment.training.max_steps == cfg.experiment.validation.val_every_n_step, \
+        "Validation has to occur at the end of training only."
 
     # launch experiment
     experiment = build_experiment(cfg, logger, checkpoint_path)
@@ -147,7 +154,7 @@ def run_slurm(cfg: DictConfig):
 @hydra.main(
     version_base=None,
     config_path="configurations",
-    config_name="config",
+    config_name="config_traj",
 )
 def run(cfg: DictConfig):
     if "_on_compute_node" in cfg and cfg.cluster.is_compute_node_offline:
@@ -177,16 +184,15 @@ def run(cfg: DictConfig):
             "When resuming a wandb run with `resume=[wandb id]`, checkpoint will be loaded from the cloud"
             "and `load` should not be specified."
         )
-
+        
     if resume:
         load_id = resume
-        print("#############################")
-        print(load_id)
-        print("#############################")
     elif load and is_run_id(load):
         load_id = load
     else:
         load_id = None
+
+    
 
     if load_id and "_on_compute_node" not in cfg:
         run_path = f"{cfg.wandb.entity}/{cfg.wandb.project}/{load_id}"

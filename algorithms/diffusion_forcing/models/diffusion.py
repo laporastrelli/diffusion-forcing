@@ -55,6 +55,7 @@ class Diffusion(nn.Module):
                 to_shape="b c f h w",
                 module=Unet3D(
                     dim=self.arch.network_size,
+                    x_shape=self.x_shape,
                     attn_dim_head=self.arch.attn_dim_head,
                     attn_heads=self.arch.attn_heads,
                     dim_mults=self.arch.dim_mults,
@@ -66,6 +67,7 @@ class Diffusion(nn.Module):
                     is_causal=self.is_causal,
                     use_init_temporal_attn=self.arch.use_init_temporal_attn,
                     time_emb_type=self.arch.time_emb_type,
+                    upscale=False if self.x_shape[1] == 1 else True
                 ),
             )
         elif len(self.x_shape) == 1:

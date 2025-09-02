@@ -19,8 +19,10 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from algorithms.common.base_pytorch_algo import BasePytorchAlgo
 from .models.diffusion import Diffusion
 
+import sys
 
 class DiffusionForcingBase(BasePytorchAlgo):
+    
     def __init__(self, cfg: DictConfig):
         self.cfg = cfg
         self.x_shape = cfg.x_shape
@@ -70,7 +72,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 pg["lr"] = lr_scale * self.cfg.lr
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
-        xs, conditions, masks = self._preprocess_batch(batch)
+        xs, conditions, masks, idxs = self._preprocess_batch(batch)
 
         xs_pred, loss = self.diffusion_model(xs, conditions, noise_levels=self._generate_noise_levels(xs))
         loss = self.reweight_loss(loss, masks)
@@ -86,13 +88,14 @@ class DiffusionForcingBase(BasePytorchAlgo):
             "loss": loss,
             "xs_pred": xs_pred,
             "xs": xs,
+            "idxs": idxs
         }
 
         return output_dict
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx, namespace="validation") -> STEP_OUTPUT:
-        xs, conditions, masks = self._preprocess_batch(batch)
+        xs, conditions, masks, idxs = self._preprocess_batch(batch)
         n_frames, batch_size, *_ = xs.shape
         xs_pred = []
         curr_frame = 0
@@ -100,6 +103,10 @@ class DiffusionForcingBase(BasePytorchAlgo):
         # context
         n_context_frames = self.context_frames // self.frame_stack
         xs_pred = xs[:n_context_frames].clone()
+        print('################################')
+        print("Batch IDX: ", batch_idx)
+        print(xs_pred.size())
+        print('################################')
         curr_frame += n_context_frames
 
         pbar = tqdm(total=n_frames, initial=curr_frame, desc="Sampling")
@@ -159,7 +166,14 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
         xs = self._unstack_and_unnormalize(xs)
         xs_pred = self._unstack_and_unnormalize(xs_pred)
-        self.validation_step_outputs.append((xs_pred.detach().cpu(), xs.detach().cpu()))
+        if idxs is not None:
+            self.validation_step_outputs.append((xs_pred.detach().cpu(), 
+                                                 xs.detach().cpu(), 
+                                                 idxs.detach().cpu()))
+        else:
+            self.validation_step_outputs.append((xs_pred.detach().cpu(), 
+                                                 xs.detach().cpu(),
+                                                 idxs))
 
         return loss
 
@@ -229,7 +243,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
         return loss.mean()
 
-    def _preprocess_batch(self, batch):
+    def _preprocess_batch_2(self, batch):
         xs = batch[0]
         batch_size, n_frames = xs.shape[:2]
 
@@ -253,17 +267,72 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
         return xs, conditions, masks
 
+    def _preprocess_batch(self, batch):
+        """
+        batch can be either:
+          (xs, cond, masks)           → no idx provided
+        or
+          (xs, cond, masks, idxs)     → idx provided
+        """
+        # 1) detect and strip idxs if present
+        if len(batch) == 3:
+            xs, cond_or_nonterm, idxs = batch
+        elif len(batch) == 2:
+            xs, cond_or_nonterm = batch
+            idxs = None
+        else:
+            raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
+
+        # 2) now proceed exactly as before up through your normalization/rearrange
+        batch_size, n_frames = xs.shape[:2]
+        if n_frames % self.frame_stack != 0:
+            raise ValueError("Number of frames must be divisible by frame stack size")
+        if self.context_frames % self.frame_stack != 0:
+            raise ValueError("Number of context frames must be divisible by frame stack size")
+
+        masks = torch.ones(n_frames, batch_size, device=xs.device)
+        n_tokens = n_frames // self.frame_stack
+
+        if self.external_cond_dim:
+            conditions = cond_or_nonterm
+            conditions = torch.cat([torch.zeros_like(conditions[:, :1]), conditions[:, 1:]], 1)
+            conditions = rearrange(conditions, "b (t fs) d -> t b (fs d)", fs=self.frame_stack)
+        else:
+            conditions = [None] * n_tokens
+
+        xs = self._normalize_x(xs)
+        xs = rearrange(xs, "b (t fs) c ... -> t b (fs c) ...", fs=self.frame_stack)
+
+        # 3) return idxs alongside the usual triplet
+        return xs, conditions, masks, idxs
+
     def _normalize_x(self, xs):
-        shape = [1] * (xs.ndim - self.data_mean.ndim) + list(self.data_mean.shape)
-        mean = self.data_mean.reshape(shape)
-        std = self.data_std.reshape(shape)
-        return (xs - mean) / std
+        if self.x_shape[-1] > 1:
+            shape = [1] * (xs.ndim - self.data_mean.ndim) + list(self.data_mean.shape)
+            mean = self.data_mean.reshape(shape)
+            std = self.data_std.reshape(shape)
+            return (xs - mean) / std
+        else:
+            xs_tmp = xs.squeeze(4).squeeze(3)
+            mean = self.data_mean
+            std = self.data_std
+            xs_tmp_n = ((xs_tmp - mean)/std).unsqueeze(3).unsqueeze(4)
+
+            return xs_tmp_n
 
     def _unnormalize_x(self, xs):
-        shape = [1] * (xs.ndim - self.data_mean.ndim) + list(self.data_mean.shape)
-        mean = self.data_mean.reshape(shape)
-        std = self.data_std.reshape(shape)
-        return xs * std + mean
+        if self.x_shape[-1] > 1:
+            shape = [1] * (xs.ndim - self.data_mean.ndim) + list(self.data_mean.shape)
+            mean = self.data_mean.reshape(shape)
+            std = self.data_std.reshape(shape)
+            return xs * std + mean
+        else:
+            xs_tmp = xs.squeeze(4).squeeze(3)
+            mean = self.data_mean
+            std = self.data_std
+            xs_tmp_un = ((xs_tmp*std) + mean).unsqueeze(3).unsqueeze(4)
+
+            return xs_tmp_un
 
     def _unstack_and_unnormalize(self, xs):
         xs = rearrange(xs, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)

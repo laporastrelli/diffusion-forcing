@@ -70,10 +70,12 @@ class Downsample(nn.Module):
 
 
 class Upsample(nn.Module):
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, upscale=True):
         super().__init__()
         self.conv = nn.Conv3d(dim, dim, kernel_size=(1, 3, 3), padding=(0, 1, 1))
+        self.upscale = upscale
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=[1.0, 2.0, 2.0], mode="nearest")
+        if self.upscale:
+            x = F.interpolate(x, scale_factor=[1.0, 2.0, 2.0], mode="nearest")
         return self.conv(x)

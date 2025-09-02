@@ -1,0 +1,12 @@
+defaults:
+  - base_video
+
+save_dir: /data2/users/lr4617/data/diffusion_forcing/video/double_pendulum_ghnn_extrapolation_square
+n_frames: 60
+resolution: 64
+data_mean: 0.986601
+data_std: 0.107765
+external_cond_dim: 0
+context_length: 60
+frame_skip: 1
+validation_multiplier: 6

@@ -4,6 +4,7 @@ defaults:
 n_frames: ${dataset.n_frames}
 frame_skip: ${dataset.frame_skip}
 metadata: ${dataset.metadata}
+vae_checkpoint: ${dataset.vae_checkpoint}
 
 # training hyperparameters
 weight_decay: 2e-3

@@ -9,6 +9,7 @@ from torchvision import transforms
 from pathlib import Path
 from abc import abstractmethod, ABC
 import json
+import sys
 
 
 class BaseVideoDataset(torch.utils.data.Dataset, ABC):
@@ -110,7 +111,9 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
                 frames.append(frame)
             else:
                 break
-
+        print('oooooooooooooooooooooooooooooooooooo')
+        print('N FRAMES: ', len(frames))
+        print('oooooooooooooooooooooooooooooooooooo')
         cap.release()
         frames = np.stack(frames, dtype=np.uint8)
         return np.transpose(frames, (0, 3, 1, 2))  # (T, C, H, W)
@@ -133,9 +136,11 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
         idx = self.idx_remap[idx]
         video_idx, frame_idx = self.split_idx(idx)
         video_path = self.data_paths[video_idx]
-        video = self.load_video(video_path)[frame_idx : frame_idx + self.n_frames]
-
+        video = np.load(video_path, allow_pickle=True)
+        video = video['arr_0'][frame_idx : frame_idx + self.n_frames]
         pad_len = self.n_frames - len(video)
+
+        assert pad_len == 0, "There should be no padding to be added"
 
         nonterminal = np.ones(self.n_frames)
         if len(video) < self.n_frames:
@@ -143,7 +148,9 @@ class BaseVideoDataset(torch.utils.data.Dataset, ABC):
             nonterminal[-pad_len:] = 0
 
         video = torch.from_numpy(video / 256.0).float()
-        video = self.transform(video)
+        video = video.permute(0, 3, 1, 2)
+        # video = self.transform(video).permute(0, 3, 1, 2)
+        
 
         if self.external_cond_dim:
             external_cond = np.load(

@@ -1,2 +1,7 @@
 from .dmlab_video_dataset import DmlabVideoDataset
 from .minecraft_video_dataset import MinecraftVideoDataset
+from .bouncing_balls_video_dataset import BouncingBallsDataset
+from .bouncing_balls_video_traj_dataset import BouncingBallsTrajDataset
+from .pendulum_latents_video_dataset import PendulumLatentsDataset
+from .single_pendulum_full_video_dataset import SinglePendulumFullDataset
+from .double_pendulum_video_dataset import DoublePendulumDataset

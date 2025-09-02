@@ -151,3 +151,4 @@ checkpoints
 # Pycharm setting
 .idea/
 data/*
+quickstart_atten.tar.gz

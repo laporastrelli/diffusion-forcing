@@ -1,0 +1,12 @@
+defaults:
+  - base_video
+
+save_dir: /data2/users/lr4617/data/diffusion_forcing/video/two_body_ghnn_extrapolation_square
+n_frames: 60
+resolution: 64
+data_mean: 0.972681
+data_std: 0.126645
+external_cond_dim: 0
+context_length: 60
+frame_skip: 1
+validation_multiplier: 6

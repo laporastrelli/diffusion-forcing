@@ -6,6 +6,7 @@ from .video import BouncingBallsTrajDataset
 from .video import PendulumLatentsDataset
 from .video import SinglePendulumFullDataset
 from .video import DoublePendulumDataset
+from .video import TwoBodyDataset
 from .offline_rl import Maze2dOfflineRLDataset
 from .video import MinecraftVideoDataset, DmlabVideoDataset
 from .robot import RobotDataset

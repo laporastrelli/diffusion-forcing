@@ -5,3 +5,4 @@ from .bouncing_balls_video_traj_dataset import BouncingBallsTrajDataset
 from .pendulum_latents_video_dataset import PendulumLatentsDataset
 from .single_pendulum_full_video_dataset import SinglePendulumFullDataset
 from .double_pendulum_video_dataset import DoublePendulumDataset
+from .two_body_video_dataset import TwoBodyDataset

@@ -1,5 +1,5 @@
-name="df_double_pendulum"
-dataset="video_double_pendulum"
+name="df_two_body"
+dataset="video_two_body"
 batch_size=3
 epochs=150
 checkpointing_frequency=15000

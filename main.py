@@ -57,6 +57,10 @@ def run_local(cfg: DictConfig):
             logger_cls = OfflineWandbLogger
         else:
             logger_cls = SpaceEfficientWandbLogger
+        
+        print("-------------------")
+        print("Output Directory", output_dir)
+        print("-------------------")
 
         offline = cfg.wandb.mode != "online"
         logger = logger_cls(

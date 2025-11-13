@@ -152,3 +152,8 @@ checkpoints
 .idea/
 data/*
 quickstart_atten.tar.gz
+
+# results
+results/*
+results_df/*
+samples_for_eval/*

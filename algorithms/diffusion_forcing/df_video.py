@@ -150,6 +150,12 @@ class DiffusionForcingVideo(DiffusionForcingBase):
                     vae_ckpnt = self.cfg.vae_checkpoint
                 except (AttributeError, KeyError):
                     vae_ckpnt = None
+                except Exception as e:
+                    print(f"caught {type(e).__name__}: {e}")
+                    print("--------------------------------")
+                    print("WARNING: no vae checkpoint found")
+                    print("--------------------------------")
+                    vae_ckpnt = None
                 if vae_ckpnt is not None:
                     root = os.path.dirname(os.path.dirname(self.cfg.vae_checkpoint))
                     save_dir = os.path.join(root, "diffusion_latents", f'validation_{self.context_length}')

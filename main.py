@@ -74,7 +74,9 @@ def run_local(cfg: DictConfig):
             logger_cls = SpaceEfficientWandbLogger
         
         print("-------------------")
-        print("Output Directory", output_dir)
+        print("Output Directory:         ", output_dir)
+        print("Validation batch size:    ", cfg.experiment.validation.batch_size)
+        print("Validation limit batches: ", cfg.experiment.validation.limit_batch)
         print("-------------------")
 
         logger = logger_cls(

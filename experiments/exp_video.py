@@ -6,7 +6,8 @@ from datasets.video import (
     PendulumLatentsDataset,
     SinglePendulumFullDataset,
     DoublePendulumDataset,
-    TwoBodyDataset
+    TwoBodyDataset,
+    ThreeBodyDataset
 )
 from algorithms.diffusion_forcing import DiffusionForcingVideo
 from .exp_base import BaseLightningExperiment
@@ -31,5 +32,6 @@ class VideoPredictionExperiment(BaseLightningExperiment):
         video_single_pendulum_full=SinglePendulumFullDataset,
         video_double_pendulum=DoublePendulumDataset,
         video_double_pendulum_vae_latents=PendulumLatentsDataset,
-        video_two_body=TwoBodyDataset
+        video_two_body=TwoBodyDataset,
+        video_three_body=ThreeBodyDataset
     )

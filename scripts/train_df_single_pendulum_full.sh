@@ -1,15 +1,15 @@
 name="df_single_pendulum_full"
 dataset="video_single_pendulum_full"
-batch_size=3
+batch_size=16
 epochs=100
 checkpointing_frequency=20
-val_every_n_epoch=102
+val_every_n_epoch=51
 val_batch_size=20
 
 
-CUDA_VISIBLE_DEVICES=3 python main.py \
+CUDA_VISIBLE_DEVICES=1 python main.py \
     +name=${name} \
-    dataset=${dataset}\
+    dataset=${dataset} \
     experiment.training.batch_size=${batch_size} \
     experiment.training.max_epochs=${epochs} \
     experiment.training.checkpointing.every_n_epochs=${checkpointing_frequency} \
@@ -17,4 +17,4 @@ CUDA_VISIBLE_DEVICES=3 python main.py \
     experiment.validation.batch_size=${val_batch_size} \
     experiment.tasks=["training","validation"] \
     experiment.validation.batch_size=${val_batch_size} \
-    algorithm.metrics=["mse"] \
+    +algorithm.metrics=["mse"] \

@@ -1,14 +1,8 @@
 # configuration parsing starts here
 defaults:
-<<<<<<< HEAD
-  - experiment: exp_prediction # experiment yaml file name in configurations/experiments folder [fixme]
-  - dataset: ts_traffic # dataset yaml file name in configurations/dataset folder [fixme]
-  - algorithm: df_prediction # algorithm yaml file name in configurations/algorithm folder [fixme]
-=======
   - experiment: exp_video # experiment yaml file name in configurations/experiments folder [fixme]
   - dataset: video_bouncing_balls # dataset yaml file name in configurations/dataset folder [fixme]
   - algorithm: df_video # algorithm yaml file name in configurations/algorithm folder [fixme]
->>>>>>> 3f94d65 (Local changes)
   - cluster: null # optional, cluster yaml file name in configurations/cluster folder. Leave null for local compute
 
 debug: false # global debug flag will be passed into configuration of experiment, dataset and algorithm

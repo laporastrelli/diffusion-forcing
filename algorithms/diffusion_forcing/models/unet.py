@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 
 
 from .utils import default, exists, cast_tuple, divisible_by
-from .gru import Conv2dGRUCell
+from .gru import Conv2dGRUCell, Conv2dBiGRU
 from .resnet import ResBlock1d
 from .sin_emb import SinusoidalPosEmb, RandomOrLearnedSinusoidalPosEmb
 from .attend import Attend
@@ -497,3 +497,197 @@ class TransitionMlp(nn.Module):
             x = self.mlp_after_gru(x)
 
         return x
+
+
+######################## NEW ########################
+# (LATEST EDITED)
+######################## NEW ########################
+def _expand_h0(h0, B, H, W, dtype, device):
+    """
+    h0 can be:
+      - None          -> zeros [B,C,H,W]
+      - [1,C,1,1]     -> broadcast to [B,C,H,W]
+      - [C,H,W]       -> expand to [B,C,H,W]
+      - [B,C,H,W]     -> as-is
+    """
+    if h0 is None:
+        return torch.zeros(B, 0, H, W, dtype=dtype, device=device)  # caller will set channels
+    if h0.dim() == 4 and h0.shape[0] == 1 and h0.shape[2] == 1 and h0.shape[3] == 1:
+        return h0.expand(B, h0.shape[1], H, W).to(dtype=dtype, device=device)
+    if h0.dim() == 3:
+        return h0.unsqueeze(0).expand(B, *h0.shape).to(dtype=dtype, device=device)
+    if h0.dim() == 4 and h0.shape[0] == B:
+        return h0.to(dtype=dtype, device=device)
+    raise ValueError("Unsupported h0 shape; expected None, [1,C,1,1], [C,H,W], or [B,C,H,W].")
+
+class BiGRUTransitionUNet(nn.Module):
+    """
+    Bidirectional transition module that mirrors TransitionUnet semantics but
+    *interleaves* UNet and GRU updates in each direction:
+        z_fwd_{t} = GRU( UNet(x_t, t, z_fwd_{t-1}), z_fwd_{t-1} )
+        z_bwd_{t} = GRU( UNet(x_t, t, z_bwd_{t+1}), z_bwd_{t+1} )
+
+    Fusion: concat [z_fwd_t ; z_bwd_t] then 1x1 Conv -> z_t (same channels as baseline).
+    `z_cond` argument is accepted for API parity but ignored in BiGRU mode.
+    """
+
+    def __init__(
+        self,
+        z_channel: int,
+        z_shape: tuple,
+        x_channel: int,
+        external_cond_dim=None,
+        network_size: int = 32,
+        num_gru_layers: int = 1,          # stacked BiGRU blocks, applied sequentially
+        self_condition: bool = False,
+        bigru_kernel_size: int = 3,
+        bigru_bias: bool = True,
+        learnable_bigru_h0: bool = True,  # own forward/backward initial codes internally
+        project_out: bool = True,         # fuse [2*z] -> [z]
+        fusion: str = "concat",           # currently concat(+1x1); could add "sum"
+    ):
+        super().__init__()
+        assert fusion in {"concat"}, "Only 'concat' fusion supported in this drop-in."
+
+        # Per-frame UNet that depends on (x_t, t, z_dir_t)
+        self.x2h = Unet(
+            network_size,
+            channels=x_channel,
+            out_dim=z_channel,              # feature channels fed to GRU
+            external_cond_dim=external_cond_dim,
+            z_cond_dim=z_channel,           # IMPORTANT: depends on running z
+            self_condition=self_condition,
+        )
+
+        # Two GRU cells per stacked layer (forward & backward)
+        self.layers = nn.ModuleList([
+            nn.ModuleDict({
+                "fwd": Conv2dGRUCell(in_channels=z_channel, hidden_channels=z_channel,
+                                     kernel_size=bigru_kernel_size, bias=bigru_bias),
+                "bwd": Conv2dGRUCell(in_channels=z_channel, hidden_channels=z_channel,
+                                     kernel_size=bigru_kernel_size, bias=bigru_bias),
+                "fuse": nn.Conv2d(2 * z_channel, z_channel, kernel_size=1) if project_out else nn.Identity(),
+            }) for _ in range(num_gru_layers)
+        ])
+
+        self.z_channel = z_channel
+        self.learnable_bigru_h0 = learnable_bigru_h0
+
+        # Optional learnable initial codes (per direction, shared over space with 1x1 broadcast)
+        if learnable_bigru_h0:
+            # Start from zeros; train will learn appropriate codes
+            self.h0_fwd = nn.Parameter(torch.zeros(list(z_shape)))
+            self.h0_bwd = nn.Parameter(torch.zeros(list(z_shape)))
+        else:
+            self.h0_fwd = None
+            self.h0_bwd = None
+
+    def forward(self, x, t, z_cond=None, external_cond=None, x_self_cond=None, mask=None):
+        """
+        x : [B,T,Cx,H,W] or [B,Cx,H,W] (T=1)
+        t : [B,T] or [B*T]
+        z_cond: ignored in BiGRU path (owned internally via h0_fwd/h0_bwd)
+        external_cond, x_self_cond: optional per-time tensors
+        mask: optional [B,T,1,1,1] or [B,T,1,H,W] (1=valid), applied to inputs & hidden
+        returns:
+            z_seq: [B,T,Cz,H,W]
+        """
+        if x.dim() == 4:  # no explicit time
+            x = x.unsqueeze(1)                 # [B,1,Cx,H,W]
+            if t.dim() == 1: t = t.unsqueeze(1)
+
+        B, T, _, H, W = x.shape
+        device, dtype = x.device, x.dtype
+
+        # Normalize condition tensors per time step
+        def take(step_tensor, t_idx):
+            if step_tensor is None:
+                return None
+            # supports [B,T,...] or already [B,...]
+            return step_tensor[:, t_idx] if step_tensor.dim() >= 3 else step_tensor
+
+        # Initial states (broadcast to spatial size)
+        if self.learnable_bigru_h0:
+            if isinstance(z_cond, tuple):
+                fwd_z_cond, bwd_z_cond = z_cond
+                
+                # check entries of **forward** latent code and use if provided
+                if fwd_z_cond is not None:
+                    h_fwd = fwd_z_cond
+                else:
+                    h_fwd = _expand_h0(self.h0_fwd, B, H, W, dtype=dtype, device=device)
+                
+                # check entries of **backward** latent code and use if provided
+                if bwd_z_cond is not None:
+                    h_bwd = bwd_z_cond
+                else:
+                    h_bwd = _expand_h0(self.h0_bwd, B, H, W, dtype=dtype, device=device)
+            else:
+                # We'll fill channels after inferring Cz from x2h’s output on step 0
+                h_fwd = _expand_h0(self.h0_fwd, B, H, W, dtype=dtype, device=device)
+                h_bwd = _expand_h0(self.h0_bwd, B, H, W, dtype=dtype, device=device)
+
+        # Stacked BiGRU layers: feed z through several intertwined passes
+        # Start with a "current z sequence" = zeros; will be overwritten layer by layer
+        z_seq = None
+
+        for layer in self.layers:
+            fwd_cell = layer["fwd"]
+            bwd_cell = layer["bwd"]
+            fuse     = layer["fuse"]
+
+            # Re-init direction states per layer (common choice; you can also carry across layers)
+            hf = h_fwd if self.learnable_bigru_h0 else torch.zeros(B, self.z_channel, H, W, device=device, dtype=dtype)
+            hb = h_bwd if self.learnable_bigru_h0 else torch.zeros(B, self.z_channel, H, W, device=device, dtype=dtype)
+
+            # --- forward direction ---
+            fwd_seq = []
+            for ti in range(T):
+                xt = x[:, ti]                               # [B,Cx,H,W]
+                tt = t[:, ti] if t.dim() == 2 else t        # [B]
+                ec = take(external_cond, ti)
+                xs = take(x_self_cond, ti)
+                if mask is not None:
+                    xt = xt * mask[:, ti].to(dtype)
+
+                # UNet depends on current direction state 'hf'
+                feat_t = self.x2h(xt, tt, hf, external_cond=ec, x_self_cond=xs)  # [B,Cz,H,W]
+
+                # GRU update
+                hf = fwd_cell(feat_t, hf)                   # [B,Cz,H,W]
+                if mask is not None:
+                    hf = hf * mask[:, ti].to(dtype)
+                fwd_seq.append(hf)
+
+            # --- backward direction ---
+            bwd_seq_rev = []
+            for ti in reversed(range(T)):
+                xt = x[:, ti]
+                tt = t[:, ti] if t.dim() == 2 else t
+                ec = take(external_cond, ti)
+                xs = take(x_self_cond, ti)
+                if mask is not None:
+                    xt = xt * mask[:, ti].to(dtype)
+
+                # UNet depends on current backward state 'hb'
+                feat_t = self.x2h(xt, tt, hb, external_cond=ec, x_self_cond=xs)  # [B,Cz,H,W]
+
+                hb = bwd_cell(feat_t, hb)                   # [B,Cz,H,W]
+                if mask is not None:
+                    hb = hb * mask[:, ti].to(dtype)
+                bwd_seq_rev.append(hb)
+
+            # align backward to forward time
+            fwd_seq = torch.stack(fwd_seq, dim=1)                  # [B,T,Cz,H,W]
+            bwd_seq = torch.stack(list(reversed(bwd_seq_rev)), 1)  # [B,T,Cz,H,W]
+
+            # fuse directions per time step
+            z_cat = torch.cat([fwd_seq, bwd_seq], dim=2)           # [B,T,2*Cz,H,W]
+            z_seq = z_cat.view(B*T, z_cat.shape[2], H, W)
+            z_seq = fuse(z_seq)                                     # [B*T,Cz,H,W]
+            z_seq = z_seq.view(B, T, self.z_channel, H, W)          # [B,T,Cz,H,W]
+
+            # Optionally, you could feed z_seq back into x2h on next layer instead of hf/hb,
+            # but here we keep hf/hb as the recurrent state carriers.
+
+        return fwd_seq, bwd_seq, z_seq  # [B,T,Cz,H,W]

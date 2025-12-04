@@ -8,7 +8,7 @@ defaults:
 debug: false # global debug flag will be passed into configuration of experiment, dataset and algorithm
 
 wandb:
-  entity: Diffusion_Forcing # wandb account name / organization name [fixme]
+  entity: information-theoretic-view-of-bn # wandb account name / organization name [fixme]
   project: diffusion-forcing # wandb project name; if not provided, defaults to root folder name [fixme]
   mode: online # set wandb logging to online, offline or dryrun
 

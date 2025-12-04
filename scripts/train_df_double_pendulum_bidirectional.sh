@@ -1,15 +1,15 @@
-name="df_single_pendulum_full"
-dataset="video_single_pendulum_full"
-batch_size=4
-epochs=60
-checkpointing_frequency=1000
-val_every_n_epoch=101
-val_batch_size=25
+name="df_double_pendulum"
+dataset="video_double_pendulum"
+batch_size=3
+epochs=150
+checkpointing_frequency=10000
+val_every_n_epoch=151
+val_batch_size=20
 val_limit_batch=2
-chunk_size=1
-transition_type="forward-only"
+chunk_size=30
+transition_type="bi-gru"
 
-CUDA_VISIBLE_DEVICES=0 python main.py \
+CUDA_VISIBLE_DEVICES=1 python main.py \
     +name=${name} \
     dataset=${dataset} \
     experiment.training.batch_size=${batch_size} \

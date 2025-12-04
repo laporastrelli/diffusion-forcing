@@ -59,10 +59,10 @@ class DoublePendulumDataset(BaseVideoDataset):
                 external_cond = np.pad(external_cond, ((0, pad_len),))
             external_cond = torch.from_numpy(external_cond).float()
             return (
-                video[:: self.frame_skip],
-                external_cond[:: self.frame_skip],
-                nonterminal[:: self.frame_skip],
+                video,
+                external_cond,
+                nonterminal,
             )
         else:
-            return video[:: self.frame_skip], nonterminal[:: self.frame_skip]
+            return video, nonterminal
 

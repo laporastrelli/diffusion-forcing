@@ -84,9 +84,12 @@ class DiffusionForcingVideo(DiffusionForcingBase):
                     vae_ckpnt = None
                 if vae_ckpnt is not None:
                     root = os.path.dirname(os.path.dirname(self.cfg.vae_checkpoint))
-                    save_dir = os.path.join(root, "diffusion_latents", f'validation_{self.context_length}')
+                    save_dir = os.path.join(root, "diffusion_latents", f'validation_{self.context_frames}')
                 else:
-                    save_dir = os.path.join(self.logger.save_dir, f'validation_{self.context_length}')
+                    if self.imputation_as_val:
+                        save_dir = os.path.join(self.logger.save_dir, f'validation_imputation_{self.context_frames}_chunk_{self.chunk_size}')
+                    else:
+                        save_dir = os.path.join(self.logger.save_dir, f'validation_{self.context_frames}_chunk_{self.chunk_size}')
                 os.makedirs(save_dir, exist_ok=True)
 
                 print('#######################################')
@@ -111,6 +114,7 @@ class DiffusionForcingVideo(DiffusionForcingBase):
                 namespace=namespace + "_vis",
                 context_frames=self.context_frames,
                 logger=self.logger.experiment,
+                chunk_size=self.chunk_size,
             )
 
         metric_dict = get_validation_metrics_for_videos(

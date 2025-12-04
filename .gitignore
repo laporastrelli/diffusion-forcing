@@ -158,6 +158,7 @@ results_df/*
 samples_for_eval/*
 
 quickstart_atten.tar.gz
+quickstart.tar.gz
 
 # results
 results/*

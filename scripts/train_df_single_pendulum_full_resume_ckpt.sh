@@ -8,6 +8,7 @@ val_batch_size=25
 val_limit_batch=2
 chunk_size=1
 transition_type="forward-only"
+resume=w50oju1e
 
 CUDA_VISIBLE_DEVICES=0 python main.py \
     +name=${name} \
@@ -21,4 +22,5 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
     experiment.validation.limit_batch=${val_limit_batch} \
     +algorithm.metrics=["mse"] \
     algorithm.chunk_size=${chunk_size} \
-    algorithm.diffusion.transition_type=${transition_type}
+    algorithm.diffusion.transition_type=${transition_type} \
+    resume=${resume}

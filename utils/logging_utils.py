@@ -38,6 +38,7 @@ def log_video(
     context_frames=0,
     color=(255, 0, 0),
     logger=None,
+    chunk_size: Optional[int] = None,
 ):
     """
     take in video tensors in range [-1, 1] and log into wandb
@@ -71,9 +72,14 @@ def log_video(
         n_samples = len(video)
         # use wandb directly here since pytorch lightning doesn't support logging videos yet
         for i in range(n_samples):
+            if chunk_size is not None and namespace.find("val") != -1:
+                str2add = f"_chunk_{chunk_size}"
+            else:
+                str2add = ""
+            
             logger.log(
                 {
-                    f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24),
+                    f"{namespace}{str2add}/{prefix}_{i}": wandb.Video(video[i], fps=24),
                     f"trainer/global_step": step,
                 }
             )

@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 import wandb
 
 
@@ -15,6 +16,8 @@ def version_to_int(artifact) -> int:
 def download_latest_checkpoint(run_path: str, download_dir: Path) -> Path:
     api = wandb.Api()
     run = api.run(run_path)
+
+    print(f"Fetching latest checkpoint for run: {run_path}", file=sys.stderr)
 
     # Find the latest saved model checkpoint.
     latest = None

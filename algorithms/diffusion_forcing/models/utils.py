@@ -66,10 +66,39 @@ def cast_tuple(t, length=1):
     return (t,) * length
 
 
-def extract(a, t, x_shape):
+def extract_(a, t, x_shape):
     b, *_ = t.shape
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+
+def extract(a, t, x_shape):
+    """
+    a: 1D tensor of length num_timesteps (e.g. sqrt_alphas_cumprod)
+    t: integer tensor of any shape (e.g. [B], [B, T], [T, B], ...)
+    x_shape: shape of the target tensor (e.g. x_t.shape)
+
+    Returns: tensor of shape (*t.shape, 1, 1, ..., 1) so it can broadcast
+             over x_t.
+    """
+    # ensure tensors & same device / dtype
+    if not torch.is_tensor(a):
+        a = torch.tensor(a, device=t.device, dtype=torch.float32)
+    if not torch.is_tensor(t):
+        t = torch.tensor(t, device=a.device, dtype=torch.long)
+
+    t = t.to(device=a.device, dtype=torch.long)
+
+    # gather coefficients for all indices in t
+    # a: [K], t_flat: [B*T*...], result: [B*T*...]
+    out = a.gather(0, t.reshape(-1))
+    out = out.view(*t.shape)  # shape == t.shape (e.g. [B, T])
+
+    # add singleton dims so out can broadcast with x_shape
+    assert len(x_shape) >= t.dim(), "t should not have more dims than x_t"
+    extra_dims = len(x_shape) - t.dim()  # e.g. 5 - 2 = 3 for [B,T,C,H,W]
+
+    return out.view(*t.shape, *([1] * extra_dims))
+
 
 
 def linear_beta_schedule(timesteps):

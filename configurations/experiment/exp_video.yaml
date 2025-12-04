@@ -13,7 +13,7 @@ training:
   max_epochs: -1
   max_steps: 100000
   checkpointing:
-    every_n_train_steps: null # save a checkpoint every n train steps
+    every_n_train_steps: 5000 # save a checkpoint every n train steps
   optim:
     gradient_clip_val: 1.0
 

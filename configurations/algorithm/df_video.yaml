@@ -2,7 +2,7 @@ defaults:
   - df_base
 
 z_shape: [16, "${dataset.resolution}", "${dataset.resolution}"] # 16 for dmlab, 32 for minecraft
-frame_stack: 4 # 4 for dmlab, 8 for minecraft
+frame_stack: 1 # 4 for dmlab, 8 for minecraft
 weight_decay: 2e-3 # 1e-3 for dmlab, bigger for minecraft
 warmup_steps: 5000
 gt_first_frame: 0.0
@@ -12,6 +12,7 @@ uncertainty_scale: 1
 learnable_init_z: True
 metadata: ${dataset.metadata}
 vae_checkpoint: ${dataset.vae_checkpoint}
+n_frames: ${dataset.n_frames}
 
 optimizer_beta: [0.9, 0.99]
 
@@ -26,4 +27,7 @@ diffusion:
   beta_schedule: "sigmoid" # cosine for dmlab, sigmoid for minecraft
   cum_snr_decay: 0.8 # 0.8 for dmlab, 0.96 for minecraft
   clip_noise: 6 # helps numerical stablity when using fp16
+  transition_type: "bi-gru" ######### NEW #########
+  imputation_as_val: False  ######### NEW #########
+  symmetric_context: False  ######### NEW #########
   

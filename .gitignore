@@ -152,6 +152,7 @@ checkpoints
 .idea/
 data/*
 quickstart_atten.tar.gz
+quickstart.tar.gz
 
 # results
 results/*

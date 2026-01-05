@@ -1,0 +1,23 @@
+name="df_single_pendulum_full_noncausal"
+dataset="video_single_pendulum_full"
+batch_size=3
+epochs=100
+checkpointing_frequency=5000
+val_every_n_epoch=102
+val_batch_size=25
+val_limit_batch=1
+causal=false
+
+CUDA_VISIBLE_DEVICES=3 python main.py \
+    +name=${name} \
+    dataset=${dataset}\
+    experiment.training.batch_size=${batch_size} \
+    experiment.training.max_epochs=${epochs} \
+    experiment.training.checkpointing.every_n_train_steps=${checkpointing_frequency} \
+    experiment.validation.val_every_n_epoch=${val_every_n_epoch} \
+    experiment.validation.batch_size=${val_batch_size} \
+    experiment.validation.limit_batch=${val_limit_batch} \
+    experiment.tasks=["training","validation"] \
+    experiment.validation.batch_size=${val_batch_size} \
+    algorithm.metrics=["mse"] \
+    algorithm.causal=${causal}

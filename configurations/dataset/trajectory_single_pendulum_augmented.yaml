@@ -1,0 +1,14 @@
+defaults:
+  - base_video
+
+resolution: 1
+external_cond_dim: 0
+n_frames: 60
+frame_skip: 1
+save_dir: /data2/users/lr4617/data/physics_trajectories/DF/single_pendulum
+validation_multiplier: 6
+context_length: 60
+observation_shape: [2, 1, 1]
+use_augemented_data: true
+data_mean: [0.002224900294095278, -0.00031862640753388405]
+data_std: [1.2262589931488037, 0.8641977310180664]

@@ -9,6 +9,8 @@ from .unet3d import Unet3D
 from .transformer import Transformer
 from .utils import linear_beta_schedule, cosine_beta_schedule, sigmoid_beta_schedule, extract, EinopsWrapper
 
+import sys
+
 ModelPrediction = namedtuple("ModelPrediction", ["pred_noise", "pred_x_start", "model_out"])
 
 
@@ -71,6 +73,9 @@ class Diffusion(nn.Module):
                 ),
             )
         elif len(self.x_shape) == 1:
+            print("===============================================")
+            print("Building transformer model for diffusion...")
+            print("===============================================")
             self.model = Transformer(
                 x_dim=x_channel,
                 external_cond_dim=self.external_cond_dim,
@@ -276,6 +281,7 @@ class Diffusion(nn.Module):
         external_cond: Optional[torch.Tensor],
         noise_levels: torch.Tensor,
     ):
+
         noise = torch.randn_like(x)
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
 

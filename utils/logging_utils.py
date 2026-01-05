@@ -14,6 +14,7 @@ from matplotlib.animation import FuncAnimation
 import os
 import tempfile
 import matplotlib.pyplot as plt
+import imageio
 
 import sys
 
@@ -55,6 +56,7 @@ def log_video(
     :param logger: optional logger to use. use global wandb if not specified
     """
 
+    # ---------------- RGB videos ----------------
     if observation_hat.size(2) == 3:
         if not logger:
             logger = wandb
@@ -80,6 +82,8 @@ def log_video(
                     f"trainer/global_step": step,
                 }
             )
+    
+    # ---------------- Multi-Channel videos (e.g., weather data) ----------------
     elif observation_hat.size(2) == 8 and observation_hat.size(3) > 1:
         # load/default logger
         if not logger:
@@ -154,6 +158,7 @@ def log_video(
                     })
                     plt.close(fig)
 
+    # ---------------- Bouncing Balls (x1, y1, vx1, vy1, x2, y2, vx2, vy2) ----------------
     elif observation_hat.size(2) == 8 and observation_hat.size(3) == 1:
         
         # Convert the PyTorch tensors to NumPy arrays and squeeze out trailing singleton dimensions.
@@ -286,6 +291,239 @@ def log_video(
             
             animations.append(ani)
             plt.close(fig)
+    
+    # ---------------- Single pendulum (q, p) ----------------
+    elif observation_hat.size(2) == 2:
+
+        if not logger:
+            logger = wandb
+        if observation_gt is None:
+            observation_gt = torch.zeros_like(observation_hat)
+
+        # ensure context frames match GT
+        observation_hat[:context_frames] = observation_gt[:context_frames]
+
+        # to numpy: (B, T, C)
+        if observation_hat.ndim == 5:
+            obs_hat = (
+                observation_hat.detach().cpu().numpy()
+                .squeeze(-1).squeeze(-1)
+                .transpose(1, 0, 2)
+            )
+            obs_gt = (
+                observation_gt.detach().cpu().numpy()
+                .squeeze(-1).squeeze(-1)
+                .transpose(1, 0, 2)
+            )
+        elif observation_hat.ndim == 3:
+            # (T, B, C) -> (B, T, C)
+            obs_hat = observation_hat.detach().cpu().numpy().transpose(1, 0, 2)
+            obs_gt  = observation_gt.detach().cpu().numpy().transpose(1, 0, 2)
+        else:
+            raise ValueError(f"Unexpected pendulum tensor ndim={observation_hat.ndim}")
+
+        B, T, C = obs_hat.shape
+
+        # fixed pendulum geometry limits (matches your correct function)
+        L = 1.0
+        xlim = (-L * 1.1, L * 1.1)
+        ylim = (-L * 1.1, 0.1 * L)
+
+        for b in range(B):
+            if b > 4:
+                break
+
+            q_hat = obs_hat[b, :, 0]  # (T,)
+            q_gt  = obs_gt[b, :, 0]
+
+            x_hat = L * np.sin(q_hat)
+            y_hat = -L * np.cos(q_hat)
+            x_gt  = L * np.sin(q_gt)
+            y_gt  = -L * np.cos(q_gt)
+
+            fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(8, 4))
+
+            for ax, title in [(ax_left, "Predictions"), (ax_right, "Ground-Truth")]:
+                ax.set_xlim(*xlim)
+                ax.set_ylim(*ylim)
+                ax.set_aspect("equal")
+                ax.axis("off")
+                ax.set_title(title)
+
+            # line artists
+            line_left,  = ax_left.plot([], [], "o-", lw=2)
+            line_right, = ax_right.plot([], [], "o-", lw=2)
+
+            # red border rectangles (data-coordinates)
+            rect_left = plt.Rectangle(
+                (xlim[0], ylim[0]),
+                xlim[1] - xlim[0],
+                ylim[1] - ylim[0],
+                fill=False, edgecolor="red", linewidth=6
+            )
+            ax_left.add_patch(rect_left)
+
+            rect_right = plt.Rectangle(
+                (xlim[0], ylim[0]),
+                xlim[1] - xlim[0],
+                ylim[1] - ylim[0],
+                fill=False, edgecolor="red", linewidth=6
+            )
+            ax_right.add_patch(rect_right)
+
+            # temp mp4
+            fps = 12
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            video_path = tmp_file.name
+            tmp_file.close()
+
+            writer = imageio.get_writer(video_path, format="mp4", mode="I", fps=fps, codec="libx264")
+            try:
+                for t in range(T):
+                    # update both panels
+                    line_left.set_data([0.0, x_hat[t]], [0.0, y_hat[t]])
+                    line_right.set_data([0.0, x_gt[t]], [0.0, y_gt[t]])
+
+                    rect_left.set_visible(t < context_frames)
+                    rect_right.set_visible(True)
+
+                    fig.canvas.draw()
+                    img = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3]
+                    writer.append_data(img)
+            finally:
+                writer.close()
+                plt.close(fig)
+
+            logger.log(
+                {
+                    f"{namespace}/{prefix}_single_pendulum_{b}": wandb.Video(video_path, fps=fps, format="mp4"),
+                    "trainer/global_step": step,
+                }
+            )
+            os.remove(video_path)
+
+    # ---------------- Double pendulum (q1, q2, p1, p2) ----------------
+    elif observation_hat.size(2) == 4:
+
+        if not logger:
+            logger = wandb
+        if observation_gt is None:
+            observation_gt = torch.zeros_like(observation_hat)
+
+        # ensure context frames match GT
+        observation_hat[:context_frames] = observation_gt[:context_frames]
+
+        # to numpy: (B, T, C)
+        if observation_hat.ndim == 5:
+            obs_hat = (
+                observation_hat.detach().cpu().numpy()
+                .squeeze(-1).squeeze(-1)
+                .transpose(1, 0, 2)
+            )
+            obs_gt = (
+                observation_gt.detach().cpu().numpy()
+                .squeeze(-1).squeeze(-1)
+                .transpose(1, 0, 2)
+            )
+        elif observation_hat.ndim == 3:
+            obs_hat = observation_hat.detach().cpu().numpy().transpose(1, 0, 2)
+            obs_gt  = observation_gt.detach().cpu().numpy().transpose(1, 0, 2)
+        else:
+            raise ValueError(f"Unexpected double-pendulum tensor ndim={observation_hat.ndim}")
+
+        B, T, C = obs_hat.shape
+
+        # fixed geometry limits (matches your correct function)
+        L1, L2 = 1.0, 1.0
+        max_range = L1 + L2
+        xlim = (-max_range * 1.1, max_range * 1.1)
+        ylim = (-max_range * 1.1, 0.1 * max_range)
+
+        for b in range(B):
+            if b > 4:
+                break
+
+            q1_hat = obs_hat[b, :, 0]
+            q2_hat = obs_hat[b, :, 1]
+            q1_gt  = obs_gt[b, :, 0]
+            q2_gt  = obs_gt[b, :, 1]
+
+            x1_hat = L1 * np.sin(q1_hat)
+            y1_hat = -L1 * np.cos(q1_hat)
+            x2_hat = x1_hat + L2 * np.sin(q2_hat)
+            y2_hat = y1_hat - L2 * np.cos(q2_hat)
+
+            x1_gt = L1 * np.sin(q1_gt)
+            y1_gt = -L1 * np.cos(q1_gt)
+            x2_gt = x1_gt + L2 * np.sin(q2_gt)
+            y2_gt = y1_gt - L2 * np.cos(q2_gt)
+
+            fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(8, 4))
+
+            for ax, title in [(ax_left, "Predictions"), (ax_right, "Ground-Truth")]:
+                ax.set_xlim(*xlim)
+                ax.set_ylim(*ylim)
+                ax.set_aspect("equal")
+                ax.axis("off")
+                ax.set_title(title)
+
+            line_left,  = ax_left.plot([], [], "o-", lw=2)
+            line_right, = ax_right.plot([], [], "o-", lw=2)
+
+            rect_left = plt.Rectangle(
+                (xlim[0], ylim[0]),
+                xlim[1] - xlim[0],
+                ylim[1] - ylim[0],
+                fill=False, edgecolor="red", linewidth=6
+            )
+            ax_left.add_patch(rect_left)
+
+            rect_right = plt.Rectangle(
+                (xlim[0], ylim[0]),
+                xlim[1] - xlim[0],
+                ylim[1] - ylim[0],
+                fill=False, edgecolor="red", linewidth=6
+            )
+            ax_right.add_patch(rect_right)
+
+            fps = 12
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            video_path = tmp_file.name
+            tmp_file.close()
+
+            writer = imageio.get_writer(video_path, format="mp4", mode="I", fps=fps, codec="libx264")
+            try:
+                for t in range(T):
+                    xs_hat = [0.0, x1_hat[t], x2_hat[t]]
+                    ys_hat = [0.0, y1_hat[t], y2_hat[t]]
+                    xs_gt  = [0.0, x1_gt[t],  x2_gt[t]]
+                    ys_gt  = [0.0, y1_gt[t],  y2_gt[t]]
+
+                    line_left.set_data(xs_hat, ys_hat)
+                    line_right.set_data(xs_gt, ys_gt)
+
+                    rect_left.set_visible(t < context_frames)
+                    rect_right.set_visible(True)
+
+                    fig.canvas.draw()
+                    img = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3]
+                    writer.append_data(img)
+            finally:
+                writer.close()
+                plt.close(fig)
+
+            logger.log(
+                {
+                    f"{namespace}/{prefix}_double_pendulum_{b}": wandb.Video(video_path, fps=fps, format="mp4"),
+                    "trainer/global_step": step,
+                }
+            )
+            os.remove(video_path)
+
+    else:
+        raise NotImplementedError(
+            f"Logging videos with channel size {observation_hat.size(2)} is not supported yet."
+        )
 
 
 def get_validation_metrics_for_videos(
@@ -304,6 +542,16 @@ def get_validation_metrics_for_videos(
     :param fvd_model: a FrechetVideoDistance object  from algorithm.common.metrics
     :return: a tuple of metrics
     """
+    if observation_hat.ndim < 5:
+        frame, batch, dim = observation_hat.shape
+        observation_hat = observation_hat.view(-1, dim)
+        observation_gt = observation_gt.view(-1, dim)
+        
+        output_dict = {}
+        output_dict["mse"] = mean_squared_error(observation_hat, observation_gt)
+        return output_dict
+    
+
     frame, batch, channel, height, width = observation_hat.shape
     output_dict = {}
     observation_gt = observation_gt.type_as(observation_hat)  # some metrics don't fully support fp16

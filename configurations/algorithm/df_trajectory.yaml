@@ -1,0 +1,29 @@
+defaults:
+  - df_base
+
+n_frames: ${dataset.n_frames}
+frame_skip: ${dataset.frame_skip}
+metadata: ${dataset.metadata}
+vae_checkpoint: ${dataset.vae_checkpoint}
+
+# training hyperparameters
+weight_decay: 2e-3
+warmup_steps: 10000
+
+diffusion:
+  stabilization_level: 10
+  beta_schedule: linear
+  objective: pred_x0
+  ddim_sampling_eta: 0.0
+  sampling_timesteps: 100
+  architecture:
+    network_size: 128
+    num_layers: 12
+    attn_heads: 4
+    dim_feedforward: 512
+
+metrics:
+  - mse
+  # - fvd
+  # - fid
+  # - lpips

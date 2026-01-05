@@ -13,18 +13,30 @@ class ResnetBlock(nn.Module):
         emb_dim: Optional[int] = None,
         groups: int = 8,
         eps=1e-6,
+        kernel_size: int = 3,
+        padding: int = 1,
     ):
         super().__init__()
         self.in_layers = nn.Sequential(
             nn.GroupNorm(num_groups=groups, num_channels=dim, eps=eps),
             nn.SiLU(),
-            nn.Conv3d(dim, dim_out, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(
+                dim, 
+                dim_out, 
+                kernel_size=(1, kernel_size, kernel_size), 
+                padding=(0, padding, padding)
+            ),
         )
 
         self.out_layers = nn.Sequential(
             nn.GroupNorm(num_groups=groups, num_channels=dim_out, eps=eps),
             nn.SiLU(),
-            nn.Conv3d(dim_out, dim_out, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            nn.Conv3d(
+                dim_out, 
+                dim_out, 
+                kernel_size=(1, kernel_size, kernel_size), 
+                padding=(0, padding, padding)
+            ),
         )
 
         self.emb_layers = (

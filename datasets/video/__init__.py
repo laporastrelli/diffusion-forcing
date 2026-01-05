@@ -7,3 +7,4 @@ from .single_pendulum_full_video_dataset import SinglePendulumFullDataset
 from .double_pendulum_video_dataset import DoublePendulumDataset
 from .two_body_video_dataset import TwoBodyDataset
 from .three_body_video_dataset import ThreeBodyDataset
+from .single_pendulum_traj_dataset import SinglePendulumTrajDataset

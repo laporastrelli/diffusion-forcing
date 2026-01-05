@@ -46,6 +46,11 @@ class DiffusionForcingBase(BasePytorchAlgo):
         super().__init__(cfg)
 
     def _build_model(self):
+        print("Building Diffusion Forcing model...")
+        print("################################")
+        print(f"Using Causal Attention: {self.causal}")
+        print("################################")
+        
         self.diffusion_model = Diffusion(
             x_shape=self.x_stacked_shape,
             external_cond_dim=self.external_cond_dim,
@@ -152,7 +157,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 # input frames within the sliding window
                 xs_pred[start_frame:] = self.diffusion_model.sample_step(
                     xs_pred[start_frame:],
-                    conditions[start_frame : curr_frame + horizon],
+                    conditions[start_frame : curr_frame + horizon] if conditions is not None else None,
                     from_noise_levels[start_frame:],
                     to_noise_levels[start_frame:],
                 )
@@ -298,7 +303,8 @@ class DiffusionForcingBase(BasePytorchAlgo):
             conditions = torch.cat([torch.zeros_like(conditions[:, :1]), conditions[:, 1:]], 1)
             conditions = rearrange(conditions, "b (t fs) d -> t b (fs d)", fs=self.frame_stack)
         else:
-            conditions = [None] * n_tokens
+            # conditions = [None] * n_tokens
+            conditions = None
 
         xs = self._normalize_x(xs)
         xs = rearrange(xs, "b (t fs) c ... -> t b (fs c) ...", fs=self.frame_stack)

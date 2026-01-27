@@ -18,6 +18,36 @@ training:
   optim:
     gradient_clip_val: 1.0
 
+# Optional Hybrid History Training stage (simplified exposure correction).
+# Runs only if the task `hybrid_history_posttrain` is included in `tasks`.
+hybrid_history_posttrain:
+  enabled: true
+  lr: 8e-6
+  precision: 16-mixed
+  batch_size: 5
+  max_epochs: 1
+  max_steps: -1
+  checkpointing:
+    every_n_train_steps: 5000
+    every_n_epochs: null
+  optim:
+    gradient_clip_val: 1.0
+
+# Optional Self-Forcing post-training stage (autoregressive rollout).
+# Runs only if the task `self_forcing_posttrain` is included in `tasks`.
+self_forcing_posttrain:
+  enabled: true
+  lr: 8e-6
+  precision: 16-mixed
+  batch_size: 5
+  max_epochs: 1
+  max_steps: -1
+  checkpointing:
+    every_n_train_steps: 500
+    every_n_epochs: null
+  optim:
+    gradient_clip_val: 1.0
+
 validation:
   val_every_n_step: null
   val_every_n_epoch: 1000

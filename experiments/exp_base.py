@@ -232,6 +232,180 @@ class BaseLightningExperiment(BaseExperiment):
             ckpt_path=self.ckpt_path,
         )
 
+    def hybrid_history_posttrain(self) -> None:
+        """Optional post-training stage with Hybrid History Training (simplified exposure correction).
+
+        Enable by adding `hybrid_history_posttrain` to `experiment.tasks`.
+        """
+        if not self.algo:
+            self.algo = self._build_algo()
+
+        post_cfg = getattr(self.cfg, "hybrid_history_posttrain", None)
+        if post_cfg is None:
+            raise ValueError(
+                "Missing experiment.hybrid_history_posttrain config; update the experiment config or remove the task."
+            )
+        if not post_cfg.get("enabled", True):
+            if is_rank_zero:
+                print(cyan("Skipping hybrid-history post-train (disabled)"))
+            return
+
+        if not hasattr(self.algo, "set_hybrid_history_mode"):
+            raise ValueError(
+                "Algorithm does not support hybrid_history mode. Expected `set_hybrid_history_mode` method."
+            )
+
+        # Switch algorithm into hybrid_history mode for this stage.
+        self.algo.set_hybrid_history_mode(True)
+
+        # Optionally override LR for the post-train stage.
+        if post_cfg.get("lr", None) is not None:
+            self.algo.cfg.lr = float(post_cfg.lr)
+
+        # Optionally override sampler settings for generated prefixes (speed/quality tradeoff).
+        old_sampling_timesteps = getattr(self.algo, "sampling_timesteps", None)
+        if post_cfg.get("sampling_timesteps", None) is not None:
+            sampling_timesteps = int(post_cfg.sampling_timesteps)
+            self.algo.sampling_timesteps = sampling_timesteps
+            self.algo.cfg.diffusion.sampling_timesteps = sampling_timesteps
+            if hasattr(self.algo, "diffusion_model"):
+                self.algo.diffusion_model.sampling_timesteps = sampling_timesteps
+
+        # Build a dedicated loader so we can set a different batch size.
+        train_dataset = self._build_dataset("training")
+        shuffle = False if isinstance(train_dataset, torch.utils.data.IterableDataset) else self.cfg.training.data.shuffle
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=int(post_cfg.batch_size),
+            num_workers=min(os.cpu_count(), self.cfg.training.data.num_workers),
+            shuffle=shuffle,
+            persistent_workers=True,
+        )
+
+        callbacks = []
+        if self.logger:
+            callbacks.append(LearningRateMonitor("step", True))
+        if "checkpointing" in post_cfg:
+            callbacks.append(
+                ModelCheckpoint(
+                    pathlib.Path(hydra.core.hydra_config.HydraConfig.get()["runtime"]["output_dir"]) / "checkpoints",
+                    **post_cfg.checkpointing,
+                )
+            )
+
+        trainer = pl.Trainer(
+            accelerator="auto",
+            logger=self.logger if self.logger else False,
+            devices="auto",
+            num_nodes=self.cfg.num_nodes,
+            strategy=DDPStrategy(find_unused_parameters=False) if torch.cuda.device_count() > 1 else "auto",
+            callbacks=callbacks,
+            gradient_clip_val=post_cfg.optim.gradient_clip_val,
+            precision=post_cfg.precision,
+            detect_anomaly=False,
+            max_epochs=post_cfg.max_epochs,
+            max_steps=post_cfg.max_steps,
+        )
+
+        if is_rank_zero:
+            print(cyan("Starting hybrid-history post-train stage"))
+        trainer.fit(self.algo, train_dataloaders=train_loader)
+
+        # Restore default mode.
+        self.algo.set_hybrid_history_mode(False)
+        if old_sampling_timesteps is not None and post_cfg.get("sampling_timesteps", None) is not None:
+            self.algo.sampling_timesteps = old_sampling_timesteps
+            self.algo.cfg.diffusion.sampling_timesteps = old_sampling_timesteps
+            if hasattr(self.algo, "diffusion_model"):
+                self.algo.diffusion_model.sampling_timesteps = old_sampling_timesteps
+
+    def self_forcing_posttrain(self) -> None:
+        """Optional post-training stage with Self-Forcing (autoregressive rollout).
+
+        Enable by adding `self_forcing_posttrain` to `experiment.tasks`.
+        """
+        if not self.algo:
+            self.algo = self._build_algo()
+
+        post_cfg = getattr(self.cfg, "self_forcing_posttrain", None)
+        if post_cfg is None:
+            raise ValueError(
+                "Missing experiment.self_forcing_posttrain config; update the experiment config or remove the task."
+            )
+        if not post_cfg.get("enabled", True):
+            if is_rank_zero:
+                print(cyan("Skipping self-forcing post-train (disabled)"))
+            return
+
+        if not hasattr(self.algo, "set_self_forcing_mode"):
+            raise ValueError(
+                "Algorithm does not support self-forcing mode. Expected `set_self_forcing_mode` method."
+            )
+
+        # Switch algorithm into self-forcing mode for this stage.
+        self.algo.set_self_forcing_mode(True)
+
+        # Optionally override LR for the post-train stage.
+        if post_cfg.get("lr", None) is not None:
+            self.algo.cfg.lr = float(post_cfg.lr)
+
+        # Optionally override sampler settings (though self-forcing uses its own denoising steps).
+        old_sampling_timesteps = getattr(self.algo, "sampling_timesteps", None)
+        if post_cfg.get("sampling_timesteps", None) is not None:
+            sampling_timesteps = int(post_cfg.sampling_timesteps)
+            self.algo.sampling_timesteps = sampling_timesteps
+            self.algo.cfg.diffusion.sampling_timesteps = sampling_timesteps
+            if hasattr(self.algo, "diffusion_model"):
+                self.algo.diffusion_model.sampling_timesteps = sampling_timesteps
+
+        # Build a dedicated loader so we can set a different batch size.
+        train_dataset = self._build_dataset("training")
+        shuffle = False if isinstance(train_dataset, torch.utils.data.IterableDataset) else self.cfg.training.data.shuffle
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=int(post_cfg.batch_size),
+            num_workers=min(os.cpu_count(), self.cfg.training.data.num_workers),
+            shuffle=shuffle,
+            persistent_workers=True,
+        )
+
+        callbacks = []
+        if self.logger:
+            callbacks.append(LearningRateMonitor("step", True))
+        if "checkpointing" in post_cfg:
+            callbacks.append(
+                ModelCheckpoint(
+                    pathlib.Path(hydra.core.hydra_config.HydraConfig.get()["runtime"]["output_dir"]) / "checkpoints",
+                    **post_cfg.checkpointing,
+                )
+            )
+
+        trainer = pl.Trainer(
+            accelerator="auto",
+            logger=self.logger if self.logger else False,
+            devices="auto",
+            num_nodes=self.cfg.num_nodes,
+            strategy=DDPStrategy(find_unused_parameters=False) if torch.cuda.device_count() > 1 else "auto",
+            callbacks=callbacks,
+            gradient_clip_val=post_cfg.optim.gradient_clip_val,
+            precision=post_cfg.precision,
+            detect_anomaly=False,
+            max_epochs=post_cfg.max_epochs,
+            max_steps=post_cfg.max_steps,
+        )
+
+        if is_rank_zero:
+            print(cyan("Starting self-forcing post-train stage (autoregressive rollout)"))
+        trainer.fit(self.algo, train_dataloaders=train_loader)
+
+        # Restore default mode.
+        self.algo.set_self_forcing_mode(False)
+        if old_sampling_timesteps is not None and post_cfg.get("sampling_timesteps", None) is not None:
+            self.algo.sampling_timesteps = old_sampling_timesteps
+            self.algo.cfg.diffusion.sampling_timesteps = old_sampling_timesteps
+            if hasattr(self.algo, "diffusion_model"):
+                self.algo.diffusion_model.sampling_timesteps = old_sampling_timesteps
+
     def validation(self) -> None:
         """
         All validation happens here

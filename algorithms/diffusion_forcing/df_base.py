@@ -43,7 +43,39 @@ class DiffusionForcingBase(BasePytorchAlgo):
         self.cfg.diffusion.cum_snr_decay = self.cfg.diffusion.cum_snr_decay ** (self.frame_stack * cfg.frame_skip)
 
         self.validation_step_outputs = []
+
+        # Hybrid History Training (post-training) support.
+        # Kept as an opt-in runtime mode so regular training remains unchanged.
+        self._hybrid_history_mode = False
+        self._hybrid_history_cfg = getattr(cfg, "hybrid_history", None)
+        
+        # True Self-Forcing (autoregressive rollout) support.
+        self._self_forcing_mode = False
+        self._self_forcing_cfg = getattr(cfg, "self_forcing", None)
+        
         super().__init__(cfg)
+
+    def set_hybrid_history_mode(self, enabled: bool = True) -> None:
+        self._hybrid_history_mode = bool(enabled)
+    
+    def set_self_forcing_mode(self, enabled: bool = True) -> None:
+        self._self_forcing_mode = bool(enabled)
+
+    def _get_hybrid_history_cfg_value(self, key: str, default):
+        if self._hybrid_history_cfg is None:
+            return default
+        try:
+            return getattr(self._hybrid_history_cfg, key)
+        except Exception:
+            return default
+    
+    def _get_self_forcing_cfg_value(self, key: str, default):
+        if self._self_forcing_cfg is None:
+            return default
+        try:
+            return getattr(self._self_forcing_cfg, key)
+        except Exception:
+            return default
 
     def _build_model(self):
         print("Building Diffusion Forcing model...")
@@ -77,6 +109,11 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 pg["lr"] = lr_scale * self.cfg.lr
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
+        if self._hybrid_history_mode and self._get_hybrid_history_cfg_value("enabled", False):
+            return self._training_step_hybrid_history(batch, batch_idx)
+        if self._self_forcing_mode and self._get_self_forcing_cfg_value("enabled", False):
+            return self._training_step_self_forcing(batch, batch_idx)
+
         xs, conditions, masks, idxs = self._preprocess_batch(batch)
 
         xs_pred, loss = self.diffusion_model(xs, conditions, noise_levels=self._generate_noise_levels(xs))
@@ -93,10 +130,279 @@ class DiffusionForcingBase(BasePytorchAlgo):
             "loss": loss,
             "xs_pred": xs_pred,
             "xs": xs,
-            "idxs": idxs
+            "idxs": idxs,
         }
 
         return output_dict
+
+    @torch.no_grad()
+    def _sample_prefix_tokens(self, xs: torch.Tensor, conditions: Optional[torch.Tensor], n_context_tokens: int, n_total_tokens: int) -> torch.Tensor:
+        """Sample tokens up to n_total_tokens, using first n_context_tokens as ground-truth context.
+
+        Returns a tensor of shape (n_total_tokens, B, *x_shape).
+        """
+        n_frames, batch_size, *_ = xs.shape
+        n_total_tokens = int(min(n_total_tokens, n_frames))
+        if n_total_tokens <= 0:
+            raise ValueError("n_total_tokens must be positive")
+        n_context_tokens = int(min(max(n_context_tokens, 0), n_total_tokens))
+
+        xs_pred = xs[:n_context_tokens].clone()
+        curr_frame = n_context_tokens
+
+        while curr_frame < n_total_tokens:
+            if self.chunk_size > 0:
+                horizon = min(n_total_tokens - curr_frame, self.chunk_size)
+            else:
+                horizon = n_total_tokens - curr_frame
+
+            assert horizon <= self.n_tokens, "horizon exceeds the number of tokens."
+            scheduling_matrix = self._generate_scheduling_matrix(horizon)
+
+            chunk = torch.randn((horizon, batch_size, *self.x_stacked_shape), device=self.device)
+            chunk = torch.clamp(chunk, -self.clip_noise, self.clip_noise)
+            xs_pred = torch.cat([xs_pred, chunk], 0)
+
+            start_frame = max(0, curr_frame + horizon - self.n_tokens)
+
+            for m in range(scheduling_matrix.shape[0] - 1):
+                from_noise_levels = np.concatenate((np.zeros((curr_frame,), dtype=np.int64), scheduling_matrix[m]))[
+                    :, None
+                ].repeat(batch_size, axis=1)
+                to_noise_levels = np.concatenate(
+                    (
+                        np.zeros((curr_frame,), dtype=np.int64),
+                        scheduling_matrix[m + 1],
+                    )
+                )[
+                    :, None
+                ].repeat(batch_size, axis=1)
+
+                from_noise_levels = torch.from_numpy(from_noise_levels).to(self.device)
+                to_noise_levels = torch.from_numpy(to_noise_levels).to(self.device)
+
+                xs_pred[start_frame:] = self.diffusion_model.sample_step(
+                    xs_pred[start_frame:],
+                    conditions[start_frame : curr_frame + horizon] if conditions is not None else None,
+                    from_noise_levels[start_frame:],
+                    to_noise_levels[start_frame:],
+                )
+
+            curr_frame += horizon
+
+        return xs_pred[:n_total_tokens]
+
+    def _training_step_hybrid_history(self, batch, batch_idx) -> STEP_OUTPUT:
+        """Hybrid History Training: Generate prefix once, concatenate with GT, train on continuation."""
+        xs, conditions, _masks, idxs = self._preprocess_batch(batch)
+
+        n_tokens, batch_size, *_ = xs.shape
+        seed_frames = int(self._get_hybrid_history_cfg_value("seed_frames", 10))
+        if seed_frames <= 0:
+            raise ValueError("algorithm.hybrid_history.seed_frames must be positive")
+        if seed_frames % self.frame_stack != 0:
+            raise ValueError("algorithm.hybrid_history.seed_frames must be divisible by frame_stack")
+        seed_tokens = seed_frames // self.frame_stack
+        seed_tokens = max(1, min(seed_tokens, n_tokens))
+
+        # Total prefix length (in frames) that will be used as *generated history* during post-training.
+        # This includes the GT seed at the start; the model generates the remaining prefix frames.
+        prefix_frames = int(self._get_hybrid_history_cfg_value("generated_prefix_frames", 0))
+        if prefix_frames <= 0:
+            # No-op fallback; user should override to actually apply hybrid history.
+            prefix_frames = seed_frames
+        if prefix_frames % self.frame_stack != 0:
+            raise ValueError("algorithm.hybrid_history.generated_prefix_frames must be divisible by frame_stack")
+        prefix_tokens = prefix_frames // self.frame_stack
+        prefix_tokens = max(seed_tokens, min(prefix_tokens, n_tokens))
+
+        # Sample a generated prefix (keeps GT seed for the first seed_tokens).
+        xs_prefix = self._sample_prefix_tokens(
+            xs,
+            conditions,
+            n_context_tokens=seed_tokens,
+            n_total_tokens=prefix_tokens,
+        )
+
+        # Build a hybrid clean sequence: generated prefix + GT remainder.
+        xs_hybrid = torch.cat([xs_prefix.detach(), xs[prefix_tokens:]], dim=0)
+
+        noise_levels = self._generate_noise_levels(xs_hybrid)
+        conditioning_noise_level = int(self._get_hybrid_history_cfg_value("conditioning_noise_level", 0))
+        conditioning_noise_level = max(0, min(conditioning_noise_level, self.timesteps - 1))
+        if prefix_tokens > 0:
+            noise_levels[:prefix_tokens] = conditioning_noise_level
+
+        xs_pred, loss = self.diffusion_model(xs_hybrid, conditions, noise_levels=noise_levels)
+
+        # Reweight loss: only learn on the continuation (after the generated prefix).
+        weight = torch.ones((n_tokens * self.frame_stack, batch_size), device=xs.device)
+        weight[: prefix_tokens * self.frame_stack] = 0.0
+        loss = self.reweight_loss(loss, weight)
+
+        if batch_idx % 20 == 0:
+            self.log("training/loss", loss)
+            self.log("training/hybrid_history_seed_tokens", float(seed_tokens))
+            self.log("training/hybrid_history_prefix_tokens", float(prefix_tokens))
+
+        xs_vis = self._unstack_and_unnormalize(xs)
+        xs_pred_vis = self._unstack_and_unnormalize(xs_pred)
+
+        return {
+            "loss": loss,
+            "xs_pred": xs_pred_vis,
+            "xs": xs_vis,
+            "idxs": idxs,
+        }
+
+    def _training_step_self_forcing(self, batch, batch_idx) -> STEP_OUTPUT:
+        """True Self-Forcing: Autoregressive block-by-block generation with random timestep exits."""
+        xs, conditions, _masks, idxs = self._preprocess_batch(batch)
+
+        n_tokens, batch_size, *_ = xs.shape
+        
+        # Configuration
+        seed_frames = int(self._get_self_forcing_cfg_value("seed_frames", 10))
+        if seed_frames % self.frame_stack != 0:
+            raise ValueError("algorithm.self_forcing.seed_frames must be divisible by frame_stack")
+        seed_tokens = seed_frames // self.frame_stack
+        seed_tokens = max(1, min(seed_tokens, n_tokens))
+        
+        block_size = int(self._get_self_forcing_cfg_value("block_size", 4))
+        if block_size % self.frame_stack != 0:
+            raise ValueError("algorithm.self_forcing.block_size must be divisible by frame_stack")
+        block_tokens = block_size // self.frame_stack
+        
+        conditioning_noise_level = int(self._get_self_forcing_cfg_value("conditioning_noise_level", 0))
+        conditioning_noise_level = max(0, min(conditioning_noise_level, self.timesteps - 1))
+        
+        num_denoising_steps = int(self._get_self_forcing_cfg_value("num_denoising_steps", 4))
+        random_exit = self._get_self_forcing_cfg_value("random_exit", True)
+        
+        # Determine how many tokens to generate
+        max_rollout_tokens = int(self._get_self_forcing_cfg_value("max_rollout_tokens", n_tokens))
+        if max_rollout_tokens < 0:
+            max_rollout_tokens = n_tokens
+        max_rollout_tokens = min(max_rollout_tokens, n_tokens)
+        
+        # Build output tensor
+        xs_rollout = xs[:seed_tokens].clone()
+        current_token = seed_tokens
+        
+        # Autoregressive block-by-block generation
+        loss_accumulator = []
+        
+        while current_token < max_rollout_tokens:
+            # Determine block size for this iteration
+            tokens_remaining = max_rollout_tokens - current_token
+            current_block_size = min(block_tokens, tokens_remaining)
+            
+            # Select which denoising step to backprop through (random per block)
+            if random_exit:
+                exit_step = torch.randint(0, num_denoising_steps, (1,), device=self.device).item()
+            else:
+                exit_step = num_denoising_steps - 1  # Always use last step
+            
+            # Initialize noisy block
+            block_noise = torch.randn((current_block_size, batch_size, *self.x_stacked_shape), device=self.device)
+            block_noise = torch.clamp(block_noise, -self.clip_noise, self.clip_noise)
+            
+            # Multi-step denoising for this block using proper diffusion forcing methodology
+            denoised_block = block_noise
+
+            # Use the same scheduling logic as validation_step(): scheduling_matrix + sliding window.
+            # We subsample the scheduling_matrix rows to exactly num_denoising_steps updates.
+            scheduling_matrix = self._generate_scheduling_matrix(current_block_size)
+            if num_denoising_steps <= 0:
+                raise ValueError("algorithm.self_forcing.num_denoising_steps must be positive")
+            row_idxs = np.linspace(
+                0,
+                scheduling_matrix.shape[0] - 1,
+                num_denoising_steps + 1,
+                dtype=np.int64,
+            )
+
+            gt_block = xs[current_token:current_token + current_block_size]
+            start_token = max(0, current_token + current_block_size - self.n_tokens)
+
+            for step_idx in range(num_denoising_steps):
+                curr_sched = scheduling_matrix[row_idxs[step_idx]]
+                next_sched = scheduling_matrix[row_idxs[step_idx + 1]]
+
+                # Concatenate context + current block (full), but only feed sliding window to the model.
+                xs_input = torch.cat([xs_rollout, denoised_block], dim=0)
+
+                from_noise_levels = np.concatenate(
+                    (np.zeros((current_token,), dtype=np.int64), curr_sched)
+                )[:, None].repeat(batch_size, axis=1)
+                to_noise_levels = np.concatenate(
+                    (np.zeros((current_token,), dtype=np.int64), next_sched)
+                )[:, None].repeat(batch_size, axis=1)
+
+                # Optional: add noise to generated context tokens (not the GT seed).
+                if current_token > seed_tokens and conditioning_noise_level > 0:
+                    from_noise_levels[seed_tokens:current_token] = conditioning_noise_level
+                    to_noise_levels[seed_tokens:current_token] = conditioning_noise_level
+
+                from_noise_levels = torch.from_numpy(from_noise_levels).to(self.device)
+                to_noise_levels = torch.from_numpy(to_noise_levels).to(self.device)
+
+                if conditions is not None:
+                    cond_window = conditions[start_token : current_token + current_block_size]
+                else:
+                    cond_window = None
+
+                compute_gradients = (step_idx == exit_step) and (current_token >= seed_tokens)
+                if compute_gradients:
+                    xs_input[start_token:] = self.diffusion_model.sample_step(
+                        xs_input[start_token:],
+                        cond_window,
+                        from_noise_levels[start_token:],
+                        to_noise_levels[start_token:],
+                    )
+                    denoised_block = xs_input[-current_block_size:]
+
+                    block_loss = F.mse_loss(denoised_block, gt_block, reduction="none").mean()
+                    loss_accumulator.append(block_loss)
+                    break
+
+                with torch.no_grad():
+                    xs_input[start_token:] = self.diffusion_model.sample_step(
+                        xs_input[start_token:],
+                        cond_window,
+                        from_noise_levels[start_token:],
+                        to_noise_levels[start_token:],
+                    )
+                    denoised_block = xs_input[-current_block_size:].detach()
+            
+            # Append generated block to rollout (detached for next iteration's context)
+            xs_rollout = torch.cat([xs_rollout, denoised_block.detach()], dim=0)
+            current_token += current_block_size
+        
+        # Average loss across blocks
+        if len(loss_accumulator) > 0:
+            loss = torch.stack(loss_accumulator).mean()
+        else:
+            # No blocks were generated (e.g., seed_frames >= max_rollout_tokens)
+            # Return a zero loss with gradient
+            loss = torch.tensor(0.0, device=xs.device, requires_grad=True)
+        
+        if batch_idx % 20 == 0:
+            self.log("training/loss", loss)
+            self.log("training/self_forcing_blocks", float(len(loss_accumulator)))
+            self.log("training/self_forcing_rollout_tokens", float(current_token))
+        
+        # Visualization: ensure matching lengths for rollout and ground truth
+        rollout_length = min(current_token, n_tokens)
+        xs_vis = self._unstack_and_unnormalize(xs[:rollout_length])
+        xs_rollout_vis = self._unstack_and_unnormalize(xs_rollout[:rollout_length])
+        
+        return {
+            "loss": loss,
+            "xs_pred": xs_rollout_vis,
+            "xs": xs_vis,
+            "idxs": idxs,
+        }
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx, namespace="validation") -> STEP_OUTPUT:
